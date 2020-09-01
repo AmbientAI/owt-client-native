@@ -127,10 +127,8 @@ P2PPeerConnectionChannel::P2PPeerConnectionChannel(
                                nullptr) {}
 
 P2PPeerConnectionChannel::~P2PPeerConnectionChannel() {
-  if (signaling_sender_) {
+  if (signaling_sender_)
     delete signaling_sender_;
-    signaling_sender_ = nullptr;
-  }
   ended_ = true;
   ClosePeerConnection();
 }
@@ -306,7 +304,7 @@ void P2PPeerConnectionChannel::SendSignalingMessage(
     const Json::Value& data,
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  if (signaling_sender_ == nullptr)
+  if (ended_) // signaling_sender_ has been deleted
     return;
   RTC_CHECK(signaling_sender_);
   std::string json_string = rtc::JsonValueToString(data);
