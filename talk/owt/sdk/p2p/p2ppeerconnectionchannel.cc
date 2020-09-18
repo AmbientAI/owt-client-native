@@ -129,7 +129,6 @@ P2PPeerConnectionChannel::P2PPeerConnectionChannel(
 P2PPeerConnectionChannel::~P2PPeerConnectionChannel() {
   if (signaling_sender_)
     delete signaling_sender_;
-  ended_ = true;
   ClosePeerConnection();
 }
 void P2PPeerConnectionChannel::Publish(
@@ -304,6 +303,9 @@ void P2PPeerConnectionChannel::SendSignalingMessage(
     const Json::Value& data,
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
+  if (ended_) {
+    return;
+  }
   RTC_CHECK(signaling_sender_);
   std::string json_string = rtc::JsonValueToString(data);
   signaling_sender_->SendSignalingMessage(
@@ -1157,6 +1159,7 @@ void P2PPeerConnectionChannel::SendStop(
 void P2PPeerConnectionChannel::ClosePeerConnection() {
   RTC_LOG(LS_INFO) << "Close peer connection.";
   if (peer_connection_) {
+    ended_ = true;
     peer_connection_->Close();
     peer_connection_ = nullptr;
     TriggerOnStopped();
