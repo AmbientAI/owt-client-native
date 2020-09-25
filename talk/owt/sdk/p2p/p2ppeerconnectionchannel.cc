@@ -1168,7 +1168,12 @@ void P2PPeerConnectionChannel::ClosePeerConnection() {
 }
 void P2PPeerConnectionChannel::CheckWaitedList() {
   RTC_LOG(LS_INFO) << "CheckWaitedList";
-  DrainPendingStreams();
+  if (!pending_publish_streams_.empty() ||
+      !pending_unpublish_streams_.empty()) {
+    DrainPendingStreams();
+  } else if (negotiation_needed_) {
+    CreateOffer();
+  }
 }
 void P2PPeerConnectionChannel::OnDataChannelStateChange() {
   RTC_CHECK(data_channel_);
