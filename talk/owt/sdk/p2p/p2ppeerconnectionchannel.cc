@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <thread>
+#include <iostream>
 #include <vector>
 #include "talk/owt/sdk/base/eventtrigger.h"
 #include "talk/owt/sdk/base/functionalobserver.h"
@@ -199,8 +200,7 @@ void P2PPeerConnectionChannel::Publish(
   RTC_LOG(LS_INFO) << "Session state: " << session_state_;
   if (on_success) {
     // TODO: Here to directly call on_success on publication
-    // publish_success_callbacks_[stream_label] = on_success;
-    event_queue_->PostTask([on_success] { on_success(); });
+    on_success();
   }
   if (on_failure) {
     std::lock_guard<std::mutex> lock(failure_callbacks_mutex_);
@@ -236,7 +236,7 @@ void P2PPeerConnectionChannel::Send(
       data_channel_->state() == webrtc::DataChannelInterface::DataState::kOpen) {
     data_channel_->Send(CreateDataBuffer(data));
     if (on_success) {
-      event_queue_->PostTask([on_success] { on_success(); });
+      on_success();
     }
   } else {
     {
@@ -653,7 +653,7 @@ void P2PPeerConnectionChannel::OnDataChannel(
     data_channel_ = nullptr;
   data_channel_ = data_channel;
   data_channel_->RegisterObserver(this);
-  DrainPendingMessages();
+  event_queue_->PostTask([this]() { DrainPendingMessages(); });
 }
 void P2PPeerConnectionChannel::OnNegotiationNeeded() {
   if (ended_)
@@ -837,7 +837,6 @@ void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
     }
     failure_callbacks_.clear();
   }
-  Stop(nullptr, nullptr);
 }
 bool P2PPeerConnectionChannel::CheckNullPointer(
     uintptr_t pointer,
@@ -908,7 +907,7 @@ void P2PPeerConnectionChannel::Unpublish(
     pending_unpublish_streams_.push_back(stream);
   }
   if (on_success) {
-    event_queue_->PostTask([on_success] { on_success(); });
+    on_success();
   }
   if (SignalingState() == PeerConnectionInterface::SignalingState::kStable)
     DrainPendingStreams();
@@ -1055,6 +1054,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
     std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
     for (auto it = pending_publish_streams_.begin();
          it != pending_publish_streams_.end(); ++it) {
+      if (ended_) {
+        break;
+      }
       std::shared_ptr<LocalStream> stream = *it;
       std::string audio_track_source = "mic";
       std::string video_track_source = "camera";
@@ -1118,6 +1120,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
     std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
     for (auto it = pending_unpublish_streams_.begin();
          it != pending_unpublish_streams_.end(); ++it) {
+      if (ended_) {
+	 break;
+      }
       std::shared_ptr<LocalStream> stream = *it;
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
@@ -1163,8 +1168,9 @@ void P2PPeerConnectionChannel::ClosePeerConnection() {
   RTC_LOG(LS_INFO) << "Close peer connection.";
   if (peer_connection_) {
     peer_connection_->Close();
+    peer_connection_ = nullptr;
+    TriggerOnStopped();
   }
-  TriggerOnStopped();
 }
 void P2PPeerConnectionChannel::CheckWaitedList() {
   RTC_LOG(LS_INFO) << "CheckWaitedList";
@@ -1179,7 +1185,7 @@ void P2PPeerConnectionChannel::OnDataChannelStateChange() {
   RTC_CHECK(data_channel_);
   if (data_channel_->state() ==
       webrtc::DataChannelInterface::DataState::kOpen) {
-    DrainPendingMessages();
+    event_queue_->PostTask([this]() { DrainPendingMessages(); });
   }
 }
 void P2PPeerConnectionChannel::OnDataChannelMessage(
@@ -1248,7 +1254,7 @@ void P2PPeerConnectionChannel::DrainPendingMessages() {
       std::tie(message, on_success, std::ignore)=*it;
       data_channel_->Send(CreateDataBuffer(*message));
       if (on_success) {
-        event_queue_->PostTask([on_success]{ on_success(); });
+	on_success();
       }
     }
     pending_messages_.clear();
