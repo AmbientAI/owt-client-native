@@ -86,9 +86,13 @@ void P2PClient::RemoveAllowedRemoteId(const std::string& target_id,
       }
       return;
     }
-    allowed_remote_ids_.erase(
-        std::remove(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), target_id),
-        allowed_remote_ids_.end());
+    for (auto it = allowed_remote_ids_.begin(), it != allowed_remote_ids_.end();) {
+      if (*it == target_id) {
+        allowed_remote_ids_.erase(it);
+      } else {
+        it++;
+      }
+    }
   }
   Stop(target_id, on_success, on_failure);
 }
@@ -396,9 +400,13 @@ void P2PClient::OnStopped(const std::string& remote_id) {
   // remove from allowed ids to prevent memory leaks.
   {
     const std::lock_guard<std::mutex> lock(remote_ids_mutex_);
-    allowed_remote_ids_.erase(
-        std::remove(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), remote_id),
-        allowed_remote_ids_.end());
+    for (auto it = allowed_remote_ids_.begin(), it != allowed_remote_ids_.end();) {
+      if (*it == remote_id) {
+        allowed_remote_ids_.erase(it);
+      } else {
+        it++;
+      }
+    }
   }
 }
 void P2PClient::OnStreamAdded(std::shared_ptr<RemoteStream> stream) {
