@@ -34,6 +34,9 @@ P2PClient::P2PClient(
       std::make_unique<rtc::TaskQueue>(task_queue_factory->CreateTaskQueue(
           "P2PClientEventQueue", webrtc::TaskQueueFactory::Priority::NORMAL));
 }
+P2PClient::~P2PClient() {
+  signaling_channel_->RemoveObserver(*this);
+}
 void P2PClient::Connect(
     const std::string& host,
     const std::string& token,

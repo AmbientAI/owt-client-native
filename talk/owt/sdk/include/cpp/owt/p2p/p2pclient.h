@@ -74,6 +74,9 @@ class P2PClient final
    */
   P2PClient(P2PClientConfiguration& configuration,
             std::shared_ptr<P2PSignalingChannelInterface> signaling_channel);
+
+  ~P2PClient();
+
   /*! Add an observer for peer client.
    @param observer Add this object to observer list.
           Do not delete this object until it is removed from observer list.
