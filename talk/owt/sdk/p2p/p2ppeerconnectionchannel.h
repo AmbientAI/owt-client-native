@@ -147,6 +147,8 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   void CheckWaitedList();  // Check pending streams and negotiation requests.
   void SendStop(std::function<void()> on_success,
                 std::function<void(std::unique_ptr<Exception>)> on_failure);
+  // Returns a new reference, so lifetime of connection lasts at least until end of caller.
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> GetPeerConnectionRef();
   void ClosePeerConnection();  // Stop session and clean up.
   // Returns true if |pointer| is not nullptr. Otherwise, return false and
   // execute |on_failure|.
@@ -211,6 +213,8 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
       pending_messages_;
   // Protects |pending_messages_|.
   std::mutex pending_messages_mutex_;
+  // Protects |ended_|
+  std::mutex ended_mutex_;
   // Indicates whether remote client supports WebRTC Plan B
   // (https://tools.ietf.org/html/draft-uberti-rtcweb-plan-00).
   // If plan B is not supported, at most one audio/video track is supported.

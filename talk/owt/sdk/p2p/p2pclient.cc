@@ -61,31 +61,31 @@ void P2PClient::Disconnect(
   signaling_channel_->Disconnect(on_success, on_failure);
 }
 void P2PClient::AddAllowedRemoteId(const std::string& target_id) {
+  const std::lock_guard<std::mutex> lock(remote_ids_mutex_);
   if (std::find(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), target_id) !=
       allowed_remote_ids_.end()) {
     RTC_LOG(LS_INFO) << "Adding duplicated remote id.";
     return;
   }
-  const std::lock_guard<std::mutex> lock(remote_ids_mutex_);
   allowed_remote_ids_.push_back(target_id);
 }
 void P2PClient::RemoveAllowedRemoteId(const std::string& target_id,
                                       std::function<void()> on_success,
                                       std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  if (std::find(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), target_id) ==
-      allowed_remote_ids_.end()) {
-    if (on_failure) {
-      event_queue_->PostTask([on_failure] {
-        std::unique_ptr<Exception> e(
-            new Exception(ExceptionType::kP2PClientRemoteNotExisted,
-                          "Trying to delete non-existed remote id."));
-        on_failure(std::move(e));
-      });
-    }
-    return;
-  }
   {
     const std::lock_guard<std::mutex> lock(remote_ids_mutex_);
+    if (std::find(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), target_id) ==
+        allowed_remote_ids_.end()) {
+      if (on_failure) {
+        event_queue_->PostTask([on_failure] {
+          std::unique_ptr<Exception> e(
+              new Exception(ExceptionType::kP2PClientRemoteNotExisted,
+                            "Trying to delete non-existed remote id."));
+          on_failure(std::move(e));
+        });
+      }
+      return;
+    }
     allowed_remote_ids_.erase(
         std::remove(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), target_id),
         allowed_remote_ids_.end());
@@ -392,6 +392,13 @@ void P2PClient::OnStopped(const std::string& remote_id) {
   if (it != pc_channels_.end()) {
     removed_pc_ = pc_channels_[remote_id];
     pc_channels_.erase(remote_id);
+  }
+  // remove from allowed ids to prevent memory leaks.
+  {
+    const std::lock_guard<std::mutex> lock(remote_ids_mutex_);
+    allowed_remote_ids_.erase(
+        std::remove(allowed_remote_ids_.begin(), allowed_remote_ids_.end(), remote_id),
+        allowed_remote_ids_.end());
   }
 }
 void P2PClient::OnStreamAdded(std::shared_ptr<RemoteStream> stream) {
