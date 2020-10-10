@@ -39,7 +39,8 @@ class P2PPeerConnectionChannelObserver {
 // An instance of P2PPeerConnectionChannel manages a session for a specified
 // remote client.
 class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
-                                 public PeerConnectionChannel {
+                                 public PeerConnectionChannel,
+                                 public std::enable_shared_from_this<P2PPeerConnectionChannel> {
  public:
   explicit P2PPeerConnectionChannel(
       PeerConnectionChannelConfiguration configuration,
@@ -201,6 +202,7 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   std::unordered_map<std::string, std::function<void()>> publish_success_callbacks_;
   // Store remote SDP if it cannot be set currently.
   std::unique_ptr<webrtc::SessionDescriptionInterface> pending_remote_sdp_;
+  std::mutex last_disconnect_mutex_;
   std::chrono::time_point<std::chrono::system_clock>
       last_disconnect_;  // Last time |peer_connection_| changes its state to
                          // "disconnect".
@@ -236,6 +238,7 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   std::function<void()> latest_publish_success_callback_;
   std::function<void(std::unique_ptr<Exception>)> latest_publish_failure_callback_;
   bool ua_sent_;
+  std::mutex stop_send_mutex_;
   bool stop_send_needed_;
   bool remote_side_offline_;
   bool ended_;

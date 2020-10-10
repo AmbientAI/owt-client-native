@@ -247,7 +247,6 @@ class P2PClient final
       pc_channels_;
   std::mutex pc_channels_mutex_;
   std::shared_ptr<P2PPeerConnectionChannel> removed_pc_;
-  std::mutex removed_pc_mutex_;
   std::string local_id_;
   std::vector<std::reference_wrapper<P2PClientObserver>> observers_;
   P2PClientConfiguration configuration_;

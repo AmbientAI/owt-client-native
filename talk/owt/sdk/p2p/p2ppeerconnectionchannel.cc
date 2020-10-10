@@ -136,9 +136,11 @@ P2PPeerConnectionChannel::~P2PPeerConnectionChannel() {
 // Returns a copy of the reference. If the reference is not null, then caller can invoke methods locking
 rtc::scoped_refptr<webrtc::PeerConnectionInterface> P2PPeerConnectionChannel::GetPeerConnectionRef() {
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
-  const std::lock_guard<std::mutex> lock(ended_mutex_);
-  if (!ended_) {
-    temp_pc_ = peer_connection_;
+  {
+    const std::lock_guard<std::mutex> lock(ended_mutex_);
+    if (!ended_) {
+      temp_pc_ = peer_connection_;
+    }
   }
   return temp_pc_;
 }
@@ -156,46 +158,60 @@ void P2PPeerConnectionChannel::Publish(
   }
   RTC_CHECK(stream->MediaStream());
   std::string stream_label = stream->MediaStream()->id();
-  if (published_streams_.find(stream_label) != published_streams_.end() ||
-      publishing_streams_.find(stream_label) != publishing_streams_.end()) {
-    if (on_failure) {
-      std::unique_ptr<Exception> e(
-          new Exception(ExceptionType::kP2PClientInvalidArgument,
-                        "The stream is already published."));
-      on_failure(std::move(e));
+  {
+    std::lock_guard<std::mutex> lock(published_streams_mutex_);
+    if (published_streams_.find(stream_label) != published_streams_.end() ||
+        publishing_streams_.find(stream_label) != publishing_streams_.end()) {
+      if (on_failure) {
+        std::unique_ptr<Exception> e(
+            new Exception(ExceptionType::kP2PClientInvalidArgument,
+                          "The stream is already published."));
+        on_failure(std::move(e));
+      }
+      return;
     }
-    return;
   }
   latest_local_stream_ = stream;
   latest_publish_success_callback_ = on_success;
   latest_publish_failure_callback_ = on_failure;
   // Send chat-closed to workaround known browser bugs, together with
   // user agent information once and once only.
-  if (stop_send_needed_) {
-    SendStop(nullptr, nullptr);
-    stop_send_needed_ = false;
+  {
+    std::lock_guard<std::mutex> lock(stop_send_mutex_);
+    if (stop_send_needed_) {
+      SendStop(nullptr, nullptr);
+      stop_send_needed_ = false;
+    }
+    if (!ua_sent_) {
+      SendUaInfo();
+      ua_sent_ = true;
+    }
   }
-  if (!ua_sent_) {
-    SendUaInfo();
-    ua_sent_ = true;
-  }
-  scoped_refptr<webrtc::MediaStreamInterface> media_stream =
+  rtc::scoped_refptr<webrtc::MediaStreamInterface> media_stream =
       stream->MediaStream();
+  // Calling [stream|track]->id() runs on signaling_thread, so call outside of locks
+  std::string stream_id = media_stream->id();
   std::pair<std::string, std::string> stream_track_info;
   for (const auto& track : media_stream->GetAudioTracks()) {
-    std::lock_guard<std::mutex> lock(local_stream_tracks_info_mutex_);
-    if (local_stream_tracks_info_.find(track->id()) ==
-        local_stream_tracks_info_.end()) {
-      stream_track_info = std::make_pair(track->id(), media_stream->id());
-      local_stream_tracks_info_.insert(stream_track_info);
+    std::string track_id = track->id();
+    {
+      std::lock_guard<std::mutex> lock(local_stream_tracks_info_mutex_);
+      if (local_stream_tracks_info_.find(track_id) ==
+          local_stream_tracks_info_.end()) {
+        stream_track_info = std::make_pair(track_id, stream_id);
+        local_stream_tracks_info_.insert(stream_track_info);
+      }
     }
   }
   for (const auto& track : media_stream->GetVideoTracks()) {
-    std::lock_guard<std::mutex> lock(local_stream_tracks_info_mutex_);
-    if (local_stream_tracks_info_.find(track->id()) ==
-        local_stream_tracks_info_.end()) {
-      stream_track_info = std::make_pair(track->id(), media_stream->id());
-      local_stream_tracks_info_.insert(stream_track_info);
+    std::string track_id = track->id();
+    {
+      std::lock_guard<std::mutex> lock(local_stream_tracks_info_mutex_);
+      if (local_stream_tracks_info_.find(track_id) ==
+          local_stream_tracks_info_.end()) {
+        stream_track_info = std::make_pair(track_id, stream_id);
+        local_stream_tracks_info_.insert(stream_track_info);
+      }
     }
   }
   {
@@ -224,13 +240,16 @@ void P2PPeerConnectionChannel::Send(
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
   // Send chat-closed to workaround known browser bugs, together with
   // user agent information once and once only.
-  if (stop_send_needed_) {
-    SendStop(nullptr, nullptr);
-    stop_send_needed_ = false;
-  }
-  if (!ua_sent_) {
-    SendUaInfo();
-    ua_sent_ = true;
+  {
+    std::lock_guard<std::mutex> lock(stop_send_mutex_);
+    if (stop_send_needed_) {
+      SendStop(nullptr, nullptr);
+      stop_send_needed_ = false;
+    }
+    if (!ua_sent_) {
+      SendUaInfo();
+      ua_sent_ = true;
+    }
   }
   // Try to send the text message.
   Json::Value content;
@@ -365,11 +384,14 @@ void P2PPeerConnectionChannel::OnIncomingSignalingMessage(
     return;
   }
   if (message_type == kChatUserAgent) {
-    // Send back user agent info once and only once.
-    if (!ua_sent_) {
-      SendUaInfo();
-      ua_sent_ = true;
-      stop_send_needed_ = false;
+    // Send back user agent info once and only once
+    {
+      std::lock_guard<std::mutex> lock(stop_send_mutex_);
+      if (!ua_sent_) {
+        SendUaInfo();
+        ua_sent_ = true;
+        stop_send_needed_ = false;
+      }
     }
     Json::Value ua;
     rtc::GetValueFromJsonObject(json_message, kMessageDataKey, &ua);
@@ -455,6 +477,7 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
   RTC_LOG(LS_INFO) << "Received message type: " << type;
   // Store reference so peer_connection_ is not deleted until function ends
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_) { return; }
   if (type == "offer" || type == "answer") {
     if (type == "offer" && session_state_ == kSessionStateMatched) {
       ChangeSessionState(kSessionStateConnecting);
@@ -497,12 +520,10 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
       sdp_string = SdpUtils::SetPreferVideoCodecs(sdp_string, video_codecs);
       std::unique_ptr<webrtc::SessionDescriptionInterface> new_desc(
           webrtc::CreateSessionDescription(desc->type(), sdp_string, nullptr));
-      // Sychronous call. After done, will invoke OnSetRemoteDescription. If
+      // Synchronous call. After done, will invoke OnSetRemoteDescription. If
       // remote sent an offer, we create answer for it.
       RTC_LOG(LS_WARNING) << "SetRemoteSdp:" << sdp_string;
-      if (temp_pc_) {
-        temp_pc_->SetRemoteDescription(std::move(new_desc), observer);
-      }
+      temp_pc_->SetRemoteDescription(std::move(new_desc), observer);
       pending_remote_sdp_.reset();
     }
   } else if (type == "candidates") {
@@ -512,12 +533,10 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
     rtc::GetStringFromJsonObject(message, kIceCandidateSdpMidKey, &sdp_mid);
     rtc::GetStringFromJsonObject(message, kIceCandidateSdpNameKey, &candidate);
     rtc::GetIntFromJsonObject(message, kIceCandidateSdpMLineIndexKey,
-                              &sdp_mline_index);
+                            &sdp_mline_index);
     webrtc::IceCandidateInterface* ice_candidate = webrtc::CreateIceCandidate(
         sdp_mid, sdp_mline_index, candidate, nullptr);
-    if (temp_pc_) {
-      temp_pc_->AddIceCandidate(ice_candidate);
-    }
+    temp_pc_->AddIceCandidate(ice_candidate);
   }
 }
 void P2PPeerConnectionChannel::OnMessageTracksAdded(
@@ -570,8 +589,7 @@ void P2PPeerConnectionChannel::OnSignalingChange(
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
   switch (new_state) {
     case PeerConnectionInterface::SignalingState::kStable:
-      temp_pc_ = GetPeerConnectionRef();
-      if (temp_pc_ && pending_remote_sdp_) {
+      if (pending_remote_sdp_) {
 	RTC_LOG(LS_INFO) << "Retrying SetRemoteDescription from kStable state";
         scoped_refptr<FunctionalSetRemoteDescriptionObserver> observer =
             FunctionalSetRemoteDescriptionObserver::Create(std::bind(
@@ -596,11 +614,11 @@ void P2PPeerConnectionChannel::OnSignalingChange(
             webrtc::CreateSessionDescription(pending_remote_sdp_->type(),
                                              sdp_string, nullptr));
         pending_remote_sdp_.reset();
-        temp_pc_->SetRemoteDescription(std::move(new_desc), observer);
-      } else if (temp_pc_) {
+        peer_connection_->SetRemoteDescription(std::move(new_desc), observer);
+      } else {
+	// Acquires locks, but does not make blocking calls to signaling_thread while
+	// holding the lock, so no deadlock
         DrainPendingStreams();
-      } else if (pending_remote_sdp_) {
-        pending_remote_sdp_.reset();
       }
       break;
     default:
@@ -677,16 +695,31 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
     case webrtc::PeerConnectionInterface::kIceConnectionCompleted:
       ChangeSessionState(kSessionStateConnected);
       // reset |last_disconnect_|.
-      last_disconnect_ =
-          std::chrono::time_point<std::chrono::system_clock>::max();
+      {
+        std::lock_guard<std::mutex> lock(last_disconnect_mutex_);
+        last_disconnect_ =
+            std::chrono::time_point<std::chrono::system_clock>::max();
+      }
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionDisconnected:
-      last_disconnect_ = std::chrono::system_clock::now();
+      {
+        std::lock_guard<std::mutex> lock(last_disconnect_mutex_);
+        last_disconnect_ = std::chrono::system_clock::now();
+      }
       // Check state after a period of time.
       std::thread([this]() {
+        // Extends lifetime of this with ref until detached thread exits. 
+	auto ref = shared_from_this();
         std::this_thread::sleep_for(std::chrono::seconds(reconnect_timeout_));
-        if (std::chrono::system_clock::now() - last_disconnect_ >=
-            std::chrono::seconds(reconnect_timeout_)) {
+	int secs_since_disconnect = 0;
+	{
+	  std::lock_guard<std::mutex> lock(last_disconnect_mutex_);
+          if (last_disconnect_ != std::chrono::time_point<std::chrono::system_clock>::max()) {
+	    secs_since_disconnect = std::chrono::duration_cast<std::chrono::seconds>(
+		std::chrono::system_clock::now() - last_disconnect_).count();
+	  }
+	}
+	if (secs_since_disconnect >= reconnect_timeout_) {
           RTC_LOG(LS_INFO) << "Detect reconnection failed, stop this session.";
           Stop(nullptr, nullptr);
         } else {
@@ -738,8 +771,10 @@ void P2PPeerConnectionChannel::OnIceCandidate(
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
     webrtc::SessionDescriptionInterface* desc) {
   RTC_LOG(LS_INFO) << "Create sdp success.";
-  // Get reference to peer_connection_ so it does not get deleted until end of this function
-  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  {
+    std::lock_guard<std::mutex> lock(ended_mutex_);
+    if (ended_) { return; }
+  }
   scoped_refptr<FunctionalSetSessionDescriptionObserver> observer =
       FunctionalSetSessionDescriptionObserver::Create(
           std::bind(
@@ -748,9 +783,7 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
           std::bind(
               &P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure,
               this, std::placeholders::_1));
-  if (temp_pc_) {
-    temp_pc_->SetLocalDescription(observer, desc);
-  }
+  peer_connection_->SetLocalDescription(observer);
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
     const std::string& error) {
@@ -777,6 +810,10 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
   {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     is_creating_offer_ = false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(ended_mutex_);  
+    if (ended_) { return; }
   }
   // Setting maximum bandwidth here.
   ApplyBitrateSettings();
@@ -814,6 +851,10 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure(
   Stop(nullptr, nullptr);
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess() {
+  {
+    std::lock_guard<std::mutex> lock(ended_mutex_);
+    if (ended_) { return; }
+  }
   PeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess();
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
@@ -851,10 +892,12 @@ bool P2PPeerConnectionChannel::CheckNullPointer(
 }
 
 void P2PPeerConnectionChannel::TriggerOnStopped() {
-  for (std::vector<P2PPeerConnectionChannelObserver*>::iterator it =
-       observers_.begin(); it != observers_.end(); it++) {
-    (*it)->OnStopped(remote_id_);
-  }
+  event_queue_->PostTask([this]() {
+    for (std::vector<P2PPeerConnectionChannelObserver*>::iterator it =
+         observers_.begin(); it != observers_.end(); it++) {
+      (*it)->OnStopped(remote_id_);
+    }
+  });
 }
 
 void P2PPeerConnectionChannel::CleanLastPeerConnection() {
@@ -882,9 +925,11 @@ void P2PPeerConnectionChannel::Unpublish(
     return;
   }
   RTC_CHECK(stream->MediaStream());
+  // Calling MediaStream->id() runs on signaling_thread, so must be outside locks.
+  std::string stream_id = stream->MediaStream()->id();
   {
     std::lock_guard<std::mutex> lock(published_streams_mutex_);
-    auto it = published_streams_.find(stream->MediaStream()->id());
+    auto it = published_streams_.find(stream_id);
     if (it == published_streams_.end()) {
       if (on_failure) {
         std::unique_ptr<Exception> e(
@@ -915,9 +960,13 @@ void P2PPeerConnectionChannel::Stop(
     case kSessionStateConnected:
     case kSessionStateMatched:
     case kSessionStateOffered:
+      
       SendStop(nullptr, nullptr);
       ClosePeerConnection();
-      stop_send_needed_ = false;
+      {
+        std::lock_guard<std::mutex> lock(stop_send_mutex_);
+        stop_send_needed_ = false;
+      }
       ChangeSessionState(kSessionStateReady);
       break;
     default:
@@ -1038,13 +1087,38 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
   ChangeSessionState(kSessionStateConnecting);
   bool negotiation_needed = false;
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  // Move contents of pending vectors to a temporary vector so
+  // lock can be released before iterating over the streams.
   // First to publish the pending_publish_streams_ list.
+  std::vector<std::shared_ptr<LocalStream>> publish_snapshot;
   {
     std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
     for (auto it = pending_publish_streams_.begin();
          it != pending_publish_streams_.end(); ++it) {
-      if (!temp_pc_)
-        break;
+      std::shared_ptr<LocalStream> stream = *it;
+      publish_snapshot.push_back(stream);
+    }
+    pending_publish_streams_.clear();
+    if (latest_local_stream_)
+      latest_local_stream_ = nullptr;
+    if (latest_publish_success_callback_)
+      latest_publish_success_callback_ = nullptr;
+  } 
+  // Then to unpublish the pending_unpublish_streams_ list.
+  std::vector<std::shared_ptr<LocalStream>> unpublish_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
+    for (auto it = pending_unpublish_streams_.begin();
+         it != pending_unpublish_streams_.end(); ++it) {
+      std::shared_ptr<LocalStream> stream = *it;
+      unpublish_snapshot.push_back(stream);
+    }
+    pending_unpublish_streams_.clear();
+  }
+  // Snapshot vectors have no contention, safe to call webrtc methods.
+  if (temp_pc_) {
+    // Snapshot vector has no thread contention, safe to call webrtc methods.
+    for (auto it = publish_snapshot.begin(); it != publish_snapshot.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
       std::string audio_track_source = "mic";
       std::string video_track_source = "camera";
@@ -1056,8 +1130,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       }
       RTC_CHECK(temp_pc_);
       // Collect stream and tracks information.
-      scoped_refptr<webrtc::MediaStreamInterface> media_stream =
+      rtc::scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
+      std::string stream_id = stream->Id();
       Json::Value track_info;
       Json::Value track_sources;
       Json::Value stream_tracks;
@@ -1069,7 +1144,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         track_info[kTrackIdKey] = track->id();
         track_info[kTrackSourceKey] = audio_track_source;
         track_sources.append(track_info);
-        temp_pc_->AddTrack(track, {media_stream->id()});
+        temp_pc_->AddTrack(track, {stream_id});
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
         // Signaling.
@@ -1078,7 +1153,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         track_info[kTrackIdKey] = track->id();
         track_info[kTrackSourceKey] = video_track_source;
         track_sources.append(track_info);
-        temp_pc_->AddTrack(track, {media_stream->id()});
+        temp_pc_->AddTrack(track, {stream_id});
       }
       // The second signaling message of track sources to remote peer.
       Json::Value json_track_sources;
@@ -1096,27 +1171,13 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       SendSignalingMessage(json_stream_info);
       negotiation_needed = true;
     }
-    pending_publish_streams_.clear();
-    if (latest_local_stream_)
-      latest_local_stream_ = nullptr;
-    if (latest_publish_success_callback_)
-      latest_publish_success_callback_ = nullptr;
-    //if (latest_publish_failure_callback_)
-    //  latest_publish_failure_callback_ = nullptr;
-  }
-  // Then to unpublish the pending_unpublish_streams_ list.
-  {
-    std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
-    for (auto it = pending_unpublish_streams_.begin();
-         it != pending_unpublish_streams_.end(); ++it) {
-      if (!temp_pc_)
-        break;
+    for (auto it = unpublish_snapshot.begin(); it != unpublish_snapshot.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
-      RTC_CHECK(peer_connection_);
+      RTC_CHECK(temp_pc_);
       for (const auto& track : media_stream->GetAudioTracks()) {
-        const auto& senders = peer_connection_->GetSenders();
+        const auto& senders = temp_pc_->GetSenders();
         for (auto& s : senders) {
           const auto& t = s->track();
           if (t != nullptr && t->id() == track->id()) {
@@ -1126,7 +1187,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         }
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
-        const auto& senders = peer_connection_->GetSenders();
+        const auto& senders = temp_pc_->GetSenders();
         for (auto& s : senders) {
           const auto& t = s->track();
           if (t != nullptr && t->id() == track->id()) {
@@ -1137,7 +1198,6 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       }
       negotiation_needed = true;
     }
-    pending_unpublish_streams_.clear();
   }
 
   if (negotiation_needed) {
@@ -1159,14 +1219,14 @@ void P2PPeerConnectionChannel::ClosePeerConnection() {
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
   {
     std::lock_guard<std::mutex> lock(ended_mutex_);
-    ended_ = true;
-    if (peer_connection_) {
+    if (!ended_) {
+      ended_ = true;
       temp_pc_ = peer_connection_;
-      peer_connection_->Close();
       peer_connection_ = nullptr;
     }
   }
   if (temp_pc_) {
+    temp_pc_->Close();
     {
       std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
       pending_unpublish_streams_.clear();
