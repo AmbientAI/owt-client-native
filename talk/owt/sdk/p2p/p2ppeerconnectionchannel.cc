@@ -1178,6 +1178,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
             break;
           }
         }
+
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
         const auto& senders = temp_pc_->GetSenders();
@@ -1353,10 +1354,10 @@ void P2PPeerConnectionChannel::HandleRemoteCapability(Json::Value& ua) {
   rtc::GetBoolFromJsonObject(capabilities, kUaUnifiedPlanKey,
                              &remote_side_supports_unified_plan_);
   remote_side_supports_plan_b_ = !remote_side_supports_unified_plan_;
-  rtc::GetBoolFromJsonObject(capabilities, kUaStreamRemovableKey,
-                             &remote_side_supports_remove_stream_);
+  // Firefox is now on unified plan semantics, so supports removing streams.
   rtc::GetBoolFromJsonObject(capabilities, kUaIgnoresDataChannelAcksKey,
                              &remote_side_ignores_datachannel_acks_);
+  remote_side_supports_remove_stream_ = true;
   RTC_LOG(LS_INFO) << "Remote side supports removing stream? "
                    << remote_side_supports_remove_stream_;
   RTC_LOG(LS_INFO) << "Remote side supports WebRTC Plan B? "
