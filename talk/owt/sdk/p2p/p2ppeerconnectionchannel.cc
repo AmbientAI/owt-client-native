@@ -171,9 +171,6 @@ void P2PPeerConnectionChannel::Publish(
       return;
     }
   }
-  latest_local_stream_ = stream;
-  latest_publish_success_callback_ = on_success;
-  latest_publish_failure_callback_ = on_failure;
   // Send chat-closed to workaround known browser bugs, together with
   // user agent information once and once only.
   {
@@ -231,8 +228,7 @@ void P2PPeerConnectionChannel::Publish(
     std::lock_guard<std::mutex> lock(failure_callbacks_mutex_);
     failure_callbacks_[stream_label] = on_failure;
   }
-  if (temp_pc_ && temp_pc_->signaling_state() == PeerConnectionInterface::SignalingState::kStable)
-    DrainPendingStreams();
+  DrainPendingStreams();
 }
 void P2PPeerConnectionChannel::Send(
     const std::string& message,
@@ -293,6 +289,7 @@ void P2PPeerConnectionChannel::RemoveObserver(
                    observers_.end());
 }
 void P2PPeerConnectionChannel::CreateOffer() {
+  // Get reference so peer_connection_ is not deleted before calling CreateOffer.
   {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     if (is_creating_offer_) {
@@ -303,7 +300,6 @@ void P2PPeerConnectionChannel::CreateOffer() {
       is_creating_offer_ = true;
     }
   }
-  // Get reference so peer_connection_ is not deleted before calling CreateOffer.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   RTC_LOG(LS_INFO) << "Create offer.";
   negotiation_needed_ = false;
@@ -616,8 +612,6 @@ void P2PPeerConnectionChannel::OnSignalingChange(
         pending_remote_sdp_.reset();
         peer_connection_->SetRemoteDescription(std::move(new_desc), observer);
       } else {
-	// Acquires locks, but does not make blocking calls to signaling_thread while
-	// holding the lock, so no deadlock
         DrainPendingStreams();
       }
       break;
@@ -687,6 +681,11 @@ void P2PPeerConnectionChannel::OnNegotiationNeeded() {
     negotiation_needed_ = true;
   }
 }
+void P2PPeerConnectionChannel::OnRenegotiationNeeded() {
+  RTC_LOG(LS_ERROR) << "OnRenegotiationNeeded";
+  CreateOffer();
+}
+
 void P2PPeerConnectionChannel::OnIceConnectionChange(
     PeerConnectionInterface::IceConnectionState new_state) {
   RTC_LOG(LS_INFO) << "Ice connection state changed: " << new_state;
@@ -700,6 +699,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
         last_disconnect_ =
             std::chrono::time_point<std::chrono::system_clock>::max();
       }
+      DrainPendingStreams();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionDisconnected:
       {
@@ -948,8 +948,7 @@ void P2PPeerConnectionChannel::Unpublish(
   if (on_success) {
     on_success();
   }
-  if (temp_pc_ && temp_pc_->signaling_state() == PeerConnectionInterface::SignalingState::kStable)
-    DrainPendingStreams();
+  DrainPendingStreams();
 }
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
@@ -1085,7 +1084,6 @@ bool P2PPeerConnectionChannel::IsAbandoned() {
 void P2PPeerConnectionChannel::DrainPendingStreams() {
   RTC_LOG(LS_INFO) << "Draining pending stream";
   ChangeSessionState(kSessionStateConnecting);
-  bool negotiation_needed = false;
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   // Move contents of pending vectors to a temporary vector so
   // lock can be released before iterating over the streams.
@@ -1099,10 +1097,6 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       publish_snapshot.push_back(stream);
     }
     pending_publish_streams_.clear();
-    if (latest_local_stream_)
-      latest_local_stream_ = nullptr;
-    if (latest_publish_success_callback_)
-      latest_publish_success_callback_ = nullptr;
   } 
   // Then to unpublish the pending_unpublish_streams_ list.
   std::vector<std::shared_ptr<LocalStream>> unpublish_snapshot;
@@ -1169,7 +1163,6 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       stream_info[kStreamSourceKey] = stream_sources;
       json_stream_info[kMessageDataKey] = stream_info;
       SendSignalingMessage(json_stream_info);
-      negotiation_needed = true;
     }
     for (auto it = unpublish_snapshot.begin(); it != unpublish_snapshot.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
@@ -1196,13 +1189,10 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           }
         }
       }
-      negotiation_needed = true;
     }
   }
-
-  if (negotiation_needed) {
-    OnNegotiationNeeded();
-  }
+  publish_snapshot.clear();
+  unpublish_snapshot.clear();
 }
 void P2PPeerConnectionChannel::SendStop(
     std::function<void()> on_success,
@@ -1247,6 +1237,7 @@ void P2PPeerConnectionChannel::CheckWaitedList() {
     CreateOffer();
   }
 }
+
 void P2PPeerConnectionChannel::OnDataChannelStateChange() {
   RTC_CHECK(data_channel_);
   if (data_channel_->state() ==
@@ -1299,7 +1290,6 @@ void P2PPeerConnectionChannel::CreateDataChannel(const std::string& label) {
   data_channel_ = peer_connection_->CreateDataChannel(label, &config);
   if (data_channel_)
     data_channel_->RegisterObserver(this);
-  OnNegotiationNeeded();
 }
 webrtc::DataBuffer P2PPeerConnectionChannel::CreateDataBuffer(
     const std::string& data) {

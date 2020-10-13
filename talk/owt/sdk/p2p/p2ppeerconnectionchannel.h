@@ -122,6 +122,7 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   virtual void OnIceGatheringChange(
       PeerConnectionInterface::IceGatheringState new_state) override;
   virtual void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override;
+  virtual void OnRenegotiationNeeded() override;
   // DataChannelObserver
   virtual void OnDataChannelStateChange() override;
   virtual void OnDataChannelMessage(const webrtc::DataBuffer& buffer) override;
