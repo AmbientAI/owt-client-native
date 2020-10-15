@@ -270,6 +270,7 @@ void P2PPeerConnectionChannel::Send(
   if (on_success) {
     on_success();
   }
+  (void) on_failure; // UNUSED
   DrainPendingMessages();
 }
 void P2PPeerConnectionChannel::ChangeSessionState(SessionState state) {
@@ -1145,7 +1146,6 @@ void P2PPeerConnectionChannel::CheckWaitedList() {
 }
 
 void P2PPeerConnectionChannel::OnDataChannelStateChange() {
-  RTC_CHECK(data_channel_);
   if (data_channel_ && data_channel_->state() ==
       webrtc::DataChannelInterface::DataState::kOpen) {
     DrainPendingMessages();
