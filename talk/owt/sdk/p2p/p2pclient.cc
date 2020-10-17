@@ -312,6 +312,21 @@ bool P2PClient::IsPeerConnectionChannelCreated(const std::string& target_id) {
     return false;
   return true;
 }
+bool P2PClient::IsPeerConnectionStale(const std::string& target_id) {
+  std::unique_lock<std::mutex> lock(pc_channels_mutex_);
+
+  // Try to find peer conntction
+  auto pcc_it = pc_channels_.find(target_id);
+
+  // If can't find it, return true so AmbientClient cleans up its map
+  if (pcc_it == pc_channels_.end()) {
+    return true;
+  }
+
+  // Can't hold lock when calling next method, b/c it need signaling thread
+  lock.unlock();
+  return pcc_it->second->IsStale();
+}
 std::shared_ptr<P2PPeerConnectionChannel> P2PClient::GetPeerConnectionChannel(
     const std::string& target_id) {
   const std::lock_guard<std::mutex> lock(pc_channels_mutex_);
