@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <thread>
 #include <vector>
+#include <iostream>
 #include "talk/owt/sdk/base/eventtrigger.h"
 #include "talk/owt/sdk/base/functionalobserver.h"
 #include "talk/owt/sdk/base/sdputils.h"
@@ -77,7 +78,7 @@ const string kUaIgnoresDataChannelAcksKey = "ignoreDataChannelAcks";
 const string kDataChannelLabelForTextMessage = "message";
 const string kTextMessageDataKey = "data";
 const string kTextMessageIdKey = "id";
-const int kStaleThresholdSecs = 60; // 5 min
+const int kStaleThresholdSecs = 300; // 5 min
 P2PPeerConnectionChannel::P2PPeerConnectionChannel(
     PeerConnectionChannelConfiguration configuration,
     const std::string& local_id,
@@ -998,8 +999,17 @@ bool P2PPeerConnectionChannel::IsStale() {
     auto now = std::chrono::system_clock::now();
     auto age = std::chrono::duration_cast<std::chrono::seconds>(now - created_time_).count();
     auto ice_state = temp_pc_->ice_connection_state();
-    is_stale == (age > kStaleThresholdSecs) &&
-                (ice_state == webrtc::PeerConnectionInterface::kIceConnectionNew);
+    auto signaling_state = temp_pc_->signaling_state();
+    is_stale = (age > kStaleThresholdSecs) &&
+               ((ice_state == webrtc::PeerConnectionInterface::kIceConnectionNew)
+                || (ice_state == webrtc::PeerConnectionInterface::kIceConnectionFailed) &&
+                   (signaling_state == webrtc::PeerConnectionInterface::kHaveLocalOffer));
+    std::cout << "(" << age <<  " > " << kStaleThresholdSecs << ") && (("
+              << ice_state << " == " << webrtc::PeerConnectionInterface::kIceConnectionNew << ") || ("
+              << ice_state << " == " << webrtc::PeerConnectionInterface::kIceConnectionFailed << ") && ("
+              << signaling_state << " == " << webrtc::PeerConnectionInterface::kHaveLocalOffer << ")) = "
+              << is_stale
+              << std::endl;
   } else {
     is_stale = true;
   }
