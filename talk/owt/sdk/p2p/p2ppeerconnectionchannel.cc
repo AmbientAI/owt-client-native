@@ -448,7 +448,8 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
       RTC_LOG(LS_ERROR) << "Failed to create session description.";
       return;
     }
-    if (type == "offer" && temp_pc_ && temp_pc_->signaling_state() != webrtc::PeerConnectionInterface::kStable) {
+    if (type == "offer" && temp_pc_ &&
+        temp_pc_->signaling_state() != webrtc::PeerConnectionInterface::SignalingState::kStable) {
       RTC_LOG(LS_INFO) << "Signaling state is " << temp_pc_->signaling_state()
                        << ", set SDP later.";
       pending_remote_sdp_ = std::move(desc);
@@ -786,7 +787,6 @@ void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess() {
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
     const std::string& error) {
   RTC_LOG(LS_ERROR) << "Set remote sdp failed. " << error;
-  Stop(nullptr, nullptr);
 }
 bool P2PPeerConnectionChannel::CheckNullPointer(
     uintptr_t pointer,
