@@ -490,7 +490,6 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
                             &sdp_mline_index);
     webrtc::IceCandidateInterface* ice_candidate = webrtc::CreateIceCandidate(
         sdp_mid, sdp_mline_index, candidate, nullptr);
-    temp_pc_->AddIceCandidate(ice_candidate);
     if(temp_pc_->remote_description()){
       if (!temp_pc_->AddIceCandidate(ice_candidate)) {
         RTC_LOG(LS_WARNING) << "Failed to add remote candidate.";
