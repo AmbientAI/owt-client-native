@@ -550,7 +550,7 @@ void P2PPeerConnectionChannel::OnSignalingChange(
   switch (new_state) {
     case PeerConnectionInterface::SignalingState::kStable:
       if (pending_remote_sdp_) {
-	    RTC_LOG(LS_INFO) << "Retrying SetRemoteDescription from kStable state";
+        RTC_LOG(LS_INFO) << "Retrying SetRemoteDescription from kStable state";
         scoped_refptr<FunctionalSetRemoteDescriptionObserver> observer =
             FunctionalSetRemoteDescriptionObserver::Create(std::bind(
                 &P2PPeerConnectionChannel::OnSetRemoteDescriptionComplete, this,
