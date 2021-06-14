@@ -1299,7 +1299,7 @@ void P2PPeerConnectionChannel::DrainPendingRemoteCandidates() {
     rtc::CritScope cs(&pending_remote_candidates_crit_);
     if (temp_pc_->remote_description()) {
       RTC_LOG(LS_INFO) << "Draining pending ICE Candidates, received " << pending_remote_candidates_.size();
-      for (auto& ice_candidate : pending_remote_candidates_) {
+      for (const auto& ice_candidate : pending_remote_candidates_) {
         if (!temp_pc_->AddIceCandidate(ice_candidate.get())) {
           RTC_LOG(LS_WARNING) << "Failed to add remote candidate.";
         }
