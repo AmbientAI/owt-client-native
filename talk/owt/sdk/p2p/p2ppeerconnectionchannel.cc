@@ -1296,7 +1296,9 @@ void P2PPeerConnectionChannel::DrainPendingMessages() {
 }
 void P2PPeerConnectionChannel::DrainPendingRemoteCandidates() {
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
-  {
+  // If we didn't get a connection ref, that means that the connection already got closed
+  // and pending remote candidates have already been cleared.
+  if (temp_pc_) {
     rtc::CritScope cs(&pending_remote_candidates_crit_);
     if (temp_pc_->remote_description()) {
       RTC_LOG(LS_INFO) << "Draining pending ICE Candidates, received " << pending_remote_candidates_.size();
