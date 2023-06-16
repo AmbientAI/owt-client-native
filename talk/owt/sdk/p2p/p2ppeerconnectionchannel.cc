@@ -546,6 +546,10 @@ void P2PPeerConnectionChannel::OnMessageStreamInfo(Json::Value& stream_info) {
 void P2PPeerConnectionChannel::OnSignalingChange(
     PeerConnectionInterface::SignalingState new_state) {
   RTC_LOG(LS_INFO) << "Signaling state changed: " << new_state;
+  // TODO @sam: We probably want to keep the peer_connection_ alive for this method,
+  // like the other methods that need the peer_connection_.
+  // Investigate uncommenting the below.
+  // rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   switch (new_state) {
     case PeerConnectionInterface::SignalingState::kStable:
       if (pending_remote_sdp_) {
