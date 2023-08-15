@@ -536,7 +536,7 @@ void P2PPeerConnectionChannel::OnMessageStreamInfo(Json::Value& stream_info) {
 void P2PPeerConnectionChannel::OnSignalingChange(
     PeerConnectionInterface::SignalingState new_state) {
   RTC_LOG(LS_INFO) << "Signaling state changed: " << new_state;
-  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   switch (new_state) {
     case PeerConnectionInterface::SignalingState::kStable:
       if (pending_remote_sdp_) {
@@ -754,9 +754,11 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     is_creating_offer_ = false;
   }
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_)
   {
-    std::lock_guard<std::mutex> lock(ended_mutex_);
-    if (ended_) { return; }
+    RTC_LOG(LS_INFO) << "Peer connection is closed, returning.";
+    return;
   }
   // Setting maximum bandwidth here.
   ApplyBitrateSettings();
