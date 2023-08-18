@@ -151,6 +151,18 @@ rtc::scoped_refptr<webrtc::PeerConnectionInterface> P2PPeerConnectionChannel::Ge
   return temp_pc_;
 }
 
+void P2PPeerConnectionChannel::ClearPendingStreams() {
+  RTC_LOG(LS_INFO) << "Clearing pending streams.";
+  {
+    std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
+    pending_publish_streams_.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
+    pending_unpublish_streams_.clear();
+  }
+}
+
 void P2PPeerConnectionChannel::Publish(
     std::shared_ptr<LocalStream> stream,
     std::function<void()> on_success,
@@ -160,6 +172,8 @@ void P2PPeerConnectionChannel::Publish(
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
     RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    // Skip on_success callback because we haven't published anything.
+    ClearPendingStreams();
     return;
   }
 
@@ -559,6 +573,7 @@ void P2PPeerConnectionChannel::OnSignalingChange(
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
     RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    ClearPendingStreams();
     return;
   }
 
@@ -856,6 +871,8 @@ void P2PPeerConnectionChannel::Unpublish(
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
     RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    // Skip on_success callback because technically we did not unpublish anything.
+    ClearPendingStreams();
     return;
   }
 
@@ -1109,7 +1126,6 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       if (stream->Source().video == owt::base::VideoSourceInfo::kScreenCast) {
         video_track_source = "screen-cast";
       }
-      RTC_CHECK(temp_pc_);
       // Collect stream and tracks information.
       rtc::scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
