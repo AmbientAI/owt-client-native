@@ -174,6 +174,12 @@ void P2PPeerConnectionChannel::Publish(
     RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
     // Skip on_success callback because we haven't published anything.
     ClearPendingStreams();
+    if (on_failure) {
+      std::unique_ptr<Exception> e(
+          new Exception(ExceptionType::kP2PClientRemoteNotExisted,
+                        "Peer connection closed."));
+      on_failure(std::move(e));
+    }
     return;
   }
 
@@ -873,6 +879,12 @@ void P2PPeerConnectionChannel::Unpublish(
     RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
     // Skip on_success callback because technically we did not unpublish anything.
     ClearPendingStreams();
+    if (on_failure) {
+      std::unique_ptr<Exception> e(
+          new Exception(ExceptionType::kP2PClientRemoteNotExisted,
+                        "Peer connection closed."));
+      on_failure(std::move(e));
+    }
     return;
   }
 
