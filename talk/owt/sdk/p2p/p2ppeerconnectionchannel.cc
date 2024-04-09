@@ -170,6 +170,19 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
   // Add reference to peer connection until end of function.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
 
+  if (!temp_pc_) {
+    RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    // Skip on_success callback because we haven't published anything.
+    ClearPendingStreams();
+    if (on_failure) {
+      std::unique_ptr<Exception> e(
+          new Exception(ExceptionType::kP2PClientRemoteNotExisted,
+                        "Peer connection closed."));
+      on_failure(std::move(e));
+    }
+    return;
+  }
+
   for (auto stream : streams) {
     RTC_LOG(LS_INFO) << "Publishing a local stream.";
     if (!CheckNullPointer((uintptr_t)stream.get(), on_failure)) {
@@ -1019,6 +1032,7 @@ void P2PPeerConnectionChannel::Unpublish(
   }
   DrainPendingStreams();
 }
+
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
