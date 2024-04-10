@@ -36,7 +36,6 @@ class P2PPublication : public Publication {
   void StopUnpublishedStream();
   /// Pause current publication's audio or/and video basing on |track_kind| provided.
   /// Not supported in P2P yet.
-  std::shared_ptr<LocalStream> GetLocalStream() const { return local_stream_; }
   void Mute(TrackKind track_kind,
             std::function<void()> on_success,
             std::function<void(std::unique_ptr<Exception>)> on_failure) override {}
@@ -49,6 +48,9 @@ class P2PPublication : public Publication {
   void AddObserver(PublicationObserver& observer) override;
   /// Unregister an observer from this p2p publication.
   void RemoveObserver(PublicationObserver& observer) override;
+  // Return the local stream associated with this publication.
+  std::shared_ptr<LocalStream> GetLocalStream() const { return local_stream_; }
+
  private:
   std::string target_id_;
   std::shared_ptr<LocalStream> local_stream_;
