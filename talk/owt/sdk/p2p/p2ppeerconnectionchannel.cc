@@ -183,16 +183,19 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
     return;
   }
 
-  for (auto stream : streams) {
-    RTC_LOG(LS_INFO) << "Publishing a local stream.";
-    if (!CheckNullPointer((uintptr_t)stream.get(), on_failure)) {
+  auto stream_labels = std::vector<std::string>();
+  std::for_each(streams.begin(), streams.end(), [&stream_labels](std::shared_ptr<LocalStream> stream) {
+    if (stream) {
+      // Calling [stream|track]->id() runs on signaling_thread, so call outside of locks
+      stream_labels.push_back(stream->MediaStream()->id());
+    } else {
       RTC_LOG(LS_INFO) << "Local stream cannot be nullptr. Skipping.";
-      continue;
     }
-    RTC_CHECK(stream->MediaStream());
-    std::string stream_label = stream->MediaStream()->id();
-    {
-      std::lock_guard<std::mutex> lock(published_streams_mutex_);
+  });
+
+  {
+    std::lock_guard<std::mutex> lock(published_streams_mutex_);
+    for (const auto &stream_label : stream_labels) {
       if (published_streams_.find(stream_label) != published_streams_.end() ||
           publishing_streams_.find(stream_label) != publishing_streams_.end()) {
         if (on_failure) {
@@ -201,9 +204,19 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
                             "The stream is already published."));
           on_failure(std::move(e));
         }
-        continue;
       }
     }
+  }
+
+  // Prune null streams
+  streams.erase(std::remove_if(streams.begin(), streams.end(), [](std::shared_ptr<LocalStream> stream) {
+    return !stream;
+  }), streams.end());
+
+
+  for (auto stream : streams) {
+    RTC_LOG(LS_INFO) << "Publishing a local stream.";
+
     // Send chat-closed to workaround known browser bugs, together with
     // user agent information once and once only.
     {
@@ -244,22 +257,24 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
         }
       }
     }
-    {
-      std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
-      pending_publish_streams_.push_back(stream);
-    }
-    {
-      std::lock_guard<std::mutex> lock(published_streams_mutex_);
-      publishing_streams_.insert(stream_label);
-    }
-    RTC_LOG(LS_INFO) << "Session state: " << session_state_;
     if (on_success) {
       on_success(stream);
     }
   }
 
+  // Update the pending publish streams
+  {
+    std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
+    pending_publish_streams_.insert(pending_publish_streams_.end(), streams.begin(), streams.end());
+  }
+  {
+    std::lock_guard<std::mutex> lock(published_streams_mutex_);
+    std::copy(stream_labels.begin(), stream_labels.end(), std::inserter(publishing_streams_, publishing_streams_.end()));
+  }
+  RTC_LOG(LS_INFO) << "Session state: " << session_state_;
+
   // With the batched call, we make a single call to DrainPendingStreams() for
-  // the entire batch. This saves a lot of chatter on the signaling channel.
+  // the entire batch.
   DrainPendingStreams();
 }
 
