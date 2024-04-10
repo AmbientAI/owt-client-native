@@ -186,8 +186,8 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
   for (auto stream : streams) {
     RTC_LOG(LS_INFO) << "Publishing a local stream.";
     if (!CheckNullPointer((uintptr_t)stream.get(), on_failure)) {
-      RTC_LOG(LS_INFO) << "Local stream cannot be nullptr.";
-      return;
+      RTC_LOG(LS_INFO) << "Local stream cannot be nullptr. Skipping.";
+      continue;
     }
     RTC_CHECK(stream->MediaStream());
     std::string stream_label = stream->MediaStream()->id();
@@ -201,7 +201,7 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
                             "The stream is already published."));
           on_failure(std::move(e));
         }
-        return;
+        continue;
       }
     }
     // Send chat-closed to workaround known browser bugs, together with

@@ -46,6 +46,9 @@ class P2PPublication : public Publication {
   void AddObserver(PublicationObserver& observer) override;
   /// Unregister an observer from this p2p publication.
   void RemoveObserver(PublicationObserver& observer) override;
+  // Return the local stream associated with this publication.
+  std::shared_ptr<LocalStream> GetLocalStream() const { return local_stream_; }
+
  private:
   std::string target_id_;
   std::shared_ptr<LocalStream> local_stream_;
