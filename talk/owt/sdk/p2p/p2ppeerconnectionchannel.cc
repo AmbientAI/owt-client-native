@@ -185,13 +185,19 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
   }
 
   auto stream_labels = std::vector<std::string>();
-  std::for_each(streams.begin(), streams.end(), [&stream_labels, &streams](std::shared_ptr<LocalStream> stream) {
+  std::for_each(streams.begin(), streams.end(), [&stream_labels, &streams, &on_failure](std::shared_ptr<LocalStream> stream) {
     if (stream) {
       // Calling [stream|track]->id() runs on signaling_thread, so call outside of locks
       RTC_CHECK(stream->MediaStream());
       stream_labels.push_back(stream->MediaStream()->id());
     } else {
       RTC_LOG(LS_INFO) << "Local stream cannot be nullptr. Skipping.";
+      if (on_failure) {
+          std::unique_ptr<Exception> e(
+              new Exception(ExceptionType::kP2PClientInvalidArgument,
+                            "The stream is null."));
+          on_failure(std::move(e));
+        }
     }
   });
 
@@ -201,13 +207,13 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
     for (const auto &stream_label : stream_labels) {
       if (published_streams_.find(stream_label) != published_streams_.end() ||
           publishing_streams_.find(stream_label) != publishing_streams_.end()) {
-        if (on_failure) {
-          // Prune the streams that are already published
-          streams.erase(std::remove_if(streams.begin(), streams.end(), [stream_label](std::shared_ptr<LocalStream> stream) {
-            return stream->MediaStream()->id() == stream_label;
-          }), streams.end());
-          stream_labels_to_prune.push_back(stream_label);
+        // Prune the streams that are already published
+        streams.erase(std::remove_if(streams.begin(), streams.end(), [stream_label](std::shared_ptr<LocalStream> stream) {
+          return stream->MediaStream()->id() == stream_label;
+        }), streams.end());
+        stream_labels_to_prune.push_back(stream_label);
 
+        if (on_failure) {
           std::unique_ptr<Exception> e(
               new Exception(ExceptionType::kP2PClientInvalidArgument,
                             "The stream is already published."));
