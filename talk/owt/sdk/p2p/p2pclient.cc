@@ -114,7 +114,7 @@ void P2PClient::PublishBatch(const std::string& target_id,
   // Secondly use pcc to publish the streams.
   auto pcc = GetPeerConnectionChannel(target_id);
   std::weak_ptr<P2PClient> weak_this = shared_from_this();
-  pcc->PublishBatch(streams, [on_success, weak_this, target_id] (std::shared_ptr<LocalStream> stream) {
+  pcc->PublishBatch(streams, [on_success, weak_this, target_id] (std::shared_ptr<owt::base::LocalStream> stream) {
     if (!on_success)
       return;
     auto that = weak_this.lock();

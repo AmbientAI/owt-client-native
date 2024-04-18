@@ -167,6 +167,7 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
     std::function<void(std::shared_ptr<LocalStream>)> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure)
 {
+  RTC_LOG(LS_INFO) << "Publishing a batch of local streams.";
   // Add reference to peer connection until end of function.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
 
@@ -184,21 +185,29 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
   }
 
   auto stream_labels = std::vector<std::string>();
-  std::for_each(streams.begin(), streams.end(), [&stream_labels](std::shared_ptr<LocalStream> stream) {
+  std::for_each(streams.begin(), streams.end(), [&stream_labels, &streams](std::shared_ptr<LocalStream> stream) {
     if (stream) {
       // Calling [stream|track]->id() runs on signaling_thread, so call outside of locks
+      RTC_CHECK(stream->MediaStream());
       stream_labels.push_back(stream->MediaStream()->id());
     } else {
       RTC_LOG(LS_INFO) << "Local stream cannot be nullptr. Skipping.";
     }
   });
 
+  std::vector<std::string> stream_labels_to_prune;
   {
     std::lock_guard<std::mutex> lock(published_streams_mutex_);
     for (const auto &stream_label : stream_labels) {
       if (published_streams_.find(stream_label) != published_streams_.end() ||
           publishing_streams_.find(stream_label) != publishing_streams_.end()) {
         if (on_failure) {
+          // Prune the streams that are already published
+          streams.erase(std::remove_if(streams.begin(), streams.end(), [stream_label](std::shared_ptr<LocalStream> stream) {
+            return stream->MediaStream()->id() == stream_label;
+          }), streams.end());
+          stream_labels_to_prune.push_back(stream_label);
+
           std::unique_ptr<Exception> e(
               new Exception(ExceptionType::kP2PClientInvalidArgument,
                             "The stream is already published."));
@@ -207,6 +216,11 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
       }
     }
   }
+
+  // Prune stream labels of already published/publishing streams
+  stream_labels.erase(std::remove_if(stream_labels.begin(), stream_labels.end(), [&stream_labels_to_prune](std::string stream_label) {
+      return std::find(stream_labels_to_prune.begin(), stream_labels_to_prune.end(), stream_label) != stream_labels_to_prune.end();
+    }), stream_labels.end());
 
   // Prune null streams
   streams.erase(std::remove_if(streams.begin(), streams.end(), [](std::shared_ptr<LocalStream> stream) {
@@ -217,19 +231,6 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
   for (auto stream : streams) {
     RTC_LOG(LS_INFO) << "Publishing a local stream.";
 
-    // Send chat-closed to workaround known browser bugs, together with
-    // user agent information once and once only.
-    {
-      std::lock_guard<std::mutex> lock(stop_send_mutex_);
-      if (stop_send_needed_) {
-        SendStop(nullptr, nullptr);
-        stop_send_needed_ = false;
-      }
-      if (!ua_sent_) {
-        SendUaInfo();
-        ua_sent_ = true;
-      }
-    }
     rtc::scoped_refptr<webrtc::MediaStreamInterface> media_stream =
         stream->MediaStream();
     // Calling [stream|track]->id() runs on signaling_thread, so call outside of locks
@@ -257,8 +258,19 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
         }
       }
     }
-    if (on_success) {
-      on_success(stream);
+  }
+
+  // Send chat-closed to workaround known browser bugs, together with
+  // user agent information once and once only.
+  {
+    std::lock_guard<std::mutex> lock(stop_send_mutex_);
+    if (stop_send_needed_) {
+      SendStop(nullptr, nullptr);
+      stop_send_needed_ = false;
+    }
+    if (!ua_sent_) {
+      SendUaInfo();
+      ua_sent_ = true;
     }
   }
 
@@ -273,6 +285,11 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
   }
   RTC_LOG(LS_INFO) << "Session state: " << session_state_;
 
+  std::for_each(streams.begin(), streams.end(), [on_success](std::shared_ptr<LocalStream> stream) {
+    if (on_success) {
+      on_success(stream);
+    }
+  });
   // With the batched call, we make a single call to DrainPendingStreams() for
   // the entire batch.
   DrainPendingStreams();
