@@ -207,10 +207,6 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
     for (const auto &stream_label : stream_labels) {
       if (published_streams_.find(stream_label) != published_streams_.end() ||
           publishing_streams_.find(stream_label) != publishing_streams_.end()) {
-        // Prune the streams that are already published
-        streams.erase(std::remove_if(streams.begin(), streams.end(), [stream_label](std::shared_ptr<LocalStream> stream) {
-          return stream->MediaStream()->id() == stream_label;
-        }), streams.end());
         stream_labels_to_prune.push_back(stream_label);
 
         if (on_failure) {
@@ -233,6 +229,25 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
     return !stream;
   }), streams.end());
 
+  // Prune the streams that are already published
+  streams.erase(std::remove_if(streams.begin(), streams.end(), [&stream_labels_to_prune](std::shared_ptr<LocalStream> stream) {
+    auto stream_label = stream->MediaStream()->id();
+    return std::find(stream_labels_to_prune.begin(), stream_labels_to_prune.end(), stream_label) != stream_labels_to_prune.end();
+  }), streams.end());
+
+  // Send chat-closed to workaround known browser bugs, together with
+  // user agent information once and once only.
+  {
+    std::lock_guard<std::mutex> lock(stop_send_mutex_);
+    if (stop_send_needed_) {
+      SendStop(nullptr, nullptr);
+      stop_send_needed_ = false;
+    }
+    if (!ua_sent_) {
+      SendUaInfo();
+      ua_sent_ = true;
+    }
+  }
 
   for (auto stream : streams) {
     RTC_LOG(LS_INFO) << "Publishing a local stream.";
@@ -263,20 +278,6 @@ void P2PPeerConnectionChannel::PublishBatch(std::vector<std::shared_ptr<LocalStr
           local_stream_tracks_info_.insert(stream_track_info);
         }
       }
-    }
-  }
-
-  // Send chat-closed to workaround known browser bugs, together with
-  // user agent information once and once only.
-  {
-    std::lock_guard<std::mutex> lock(stop_send_mutex_);
-    if (stop_send_needed_) {
-      SendStop(nullptr, nullptr);
-      stop_send_needed_ = false;
-    }
-    if (!ua_sent_) {
-      SendUaInfo();
-      ua_sent_ = true;
     }
   }
 
