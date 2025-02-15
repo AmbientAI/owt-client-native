@@ -150,9 +150,11 @@ void PeerConnectionDependencyFactory::
 
 #elif defined(WEBRTC_LINUX)
   // MSDK support for Linux is not in place. Use default.
-  if (encoded_frame_) {
+  if (encoded_frame_ || true) {
+    RTC_LOG(LS_ERROR) << "Encoded frame is enabled";
     encoder_factory.reset(new EncodedVideoEncoderFactory());
   } else {
+    RTC_LOG(LS_ERROR) << "Encoded frame is disabled";
     encoder_factory = webrtc::CreateBuiltinVideoEncoderFactory();
   }
 
