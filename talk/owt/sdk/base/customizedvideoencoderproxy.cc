@@ -143,6 +143,7 @@ int32_t CustomizedVideoEncoderProxy::Encode(
   std::unique_ptr<uint8_t[]> data(new uint8_t[buffer.size()]);
   uint8_t* data_ptr = data.get();
   uint32_t data_size = static_cast<uint32_t>(buffer.size());
+  // TODO(dtag): Looks like there's 2 copies here. Update to just do 1.
   std::copy(buffer.begin(), buffer.end(), data_ptr);
   webrtc::EncodedImage encodedframe(data_ptr, buffer.size(), buffer.size());
 #endif

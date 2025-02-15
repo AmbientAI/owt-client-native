@@ -212,6 +212,13 @@ void CustomizedFramesCapturer::AdjustFrameBuffer(uint32_t size) {
 
 // Executed in the context of CustomizedFramesThread.
 void CustomizedFramesCapturer::ReadFrame() {
+  RTC_LOG(LS_ERROR) << "[CustomizedFramesCapturer] ReadFrame called. "
+                   << "frame_generator_ addr: "
+                   << static_cast<void*>(frame_generator_.get())
+                   << ", encoder_ addr: "
+                   << static_cast<void*>(encoder_)
+                   << ", data_callback_ addr: "
+                   << static_cast<void*>(data_callback_);
   // Signal the previously read frame to downstream in worker_thread.
   rtc::CritScope lock(&lock_);
   if (!data_callback_)
@@ -239,6 +246,7 @@ void CustomizedFramesCapturer::ReadFrame() {
     data_callback_->OnFrame(capture_frame);
   } else if (encoder_ != nullptr) {  // video encoder interface used. Pass the
                                      // encoder information.
+    RTC_LOG(LS_ERROR) << "[CustomizedFramesCapturer] Generating encoded frame. ";
     CustomizedEncoderBufferHandle* encoder_context =
         new CustomizedEncoderBufferHandle;
     encoder_context->encoder = encoder_;
