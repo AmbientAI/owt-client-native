@@ -111,6 +111,7 @@ CustomizedFramesCapturer::~CustomizedFramesCapturer() {
 
 void CustomizedFramesCapturer::RegisterCaptureDataCallback(
     rtc::VideoSinkInterface<webrtc::VideoFrame>* dataCallback){
+  RTC_LOG(LS_ERROR) << "[CustomizedFramesCapturer] RegisterCaptureDataCallback";
   rtc::CritScope lock(&lock_);
   data_callback_ = dataCallback;
 }
@@ -258,16 +259,19 @@ void CustomizedFramesCapturer::ReadFrame() {
         new rtc::RefCountedObject<owt::base::EncodedFrameBuffer>(
             encoder_context);
 
-    webrtc::VideoFrame pending_frame =
-        webrtc::VideoFrame::Builder()
-            .set_video_frame_buffer(buffer)
-            .set_timestamp_rtp(0)
-            .set_timestamp_ms(rtc::TimeMillis())
-            .set_rotation(webrtc::kVideoRotation_0)
-            .build();
+    bool has_frame = encoder_->GenerateNextEncodedFrame(nullptr, 0);
+    if (has_frame) {
+      webrtc::VideoFrame pending_frame =
+          webrtc::VideoFrame::Builder()
+              .set_video_frame_buffer(buffer)
+              .set_timestamp_rtp(0)
+              .set_timestamp_ms(rtc::TimeMillis())
+              .set_rotation(webrtc::kVideoRotation_0)
+              .build();
 
-    pending_frame.set_ntp_time_ms(0);
-    data_callback_->OnFrame(pending_frame);
+      pending_frame.set_ntp_time_ms(0);
+      data_callback_->OnFrame(pending_frame);
+    }
   }
 }
 }  // namespace base
