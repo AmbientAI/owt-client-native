@@ -47,6 +47,7 @@ CustomizedVideoCapturerFactory::Create(
   CustomizedVideoSource::~CustomizedVideoSource() = default;
 
   void CustomizedVideoSource::OnFrame(const webrtc::VideoFrame& frame) {
+    RTC_LOG(LS_ERROR) << "[CustomizedVideoSource] OnFrame";
     // TODO(johny): We need to adapt frame for yuv input here, but not for
     // encoded input.
     broadcaster_.OnFrame(frame);
@@ -84,6 +85,7 @@ CustomizedVideoCapturerFactory::Create(
   CustomizedCapturer* CustomizedCapturer::Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       VideoEncoderInterface * encoder) {
+    RTC_LOG(LS_ERROR) << "[CustomizedCapturer] Create with encoder";
     std::unique_ptr<CustomizedCapturer> vcm_capturer(new CustomizedCapturer());
     if (!vcm_capturer->Init(parameters, encoder))
       return nullptr;
@@ -131,6 +133,7 @@ CustomizedVideoCapturerFactory::Create(
   bool CustomizedCapturer::Init(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       VideoEncoderInterface * encoder) {
+    RTC_LOG(LS_ERROR) << "[CustomizedCapturer] Init with encoder";
     vcm_ = CustomizedVideoCapturerFactory::Create(parameters, encoder);
 
     if (!vcm_)
@@ -186,6 +189,7 @@ CustomizedVideoCapturerFactory::Create(
   CustomizedCapturer::~CustomizedCapturer() { Destroy(); }
 
   void CustomizedCapturer::OnFrame(const webrtc::VideoFrame& frame) {
+    RTC_LOG(LS_ERROR) << "[CustomizedCapturer] OnFrame";
     CustomizedVideoSource::OnFrame(frame);
   }
 

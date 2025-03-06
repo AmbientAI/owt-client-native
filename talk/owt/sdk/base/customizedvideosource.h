@@ -160,6 +160,7 @@ class LocalEncodedCaptureTrackSource : public webrtc::VideoTrackSource {
   static rtc::scoped_refptr<LocalEncodedCaptureTrackSource> Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       VideoEncoderInterface* encoder) {
+    RTC_LOG(LS_ERROR) << "[LocalEncodedCaptureTrackSource] Create";
     std::unique_ptr<CustomizedCapturer> capturer;
     capturer =
         absl::WrapUnique(CustomizedCapturer::Create(parameters, encoder));

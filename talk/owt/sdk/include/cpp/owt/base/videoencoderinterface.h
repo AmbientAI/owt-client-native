@@ -45,6 +45,7 @@ class VideoEncoderInterface {
    if the encoder fails to encode one frame.
    */
   virtual bool EncodeOneFrame(std::vector<uint8_t>& buffer, bool key_frame) = 0;
+  virtual bool GenerateNextEncodedFrame(uint8_t* buffer, const uint32_t capacity) = 0;
 #endif
   /**
    @brief Release the resources that current encoder holds.
