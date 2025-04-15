@@ -8,6 +8,7 @@
 #include "modules/video_coding/codecs/vp9/include/vp9.h"
 #include "webrtc/common_types.h"
 #include "webrtc/common_video/h264/profile_level_id.h"
+#include "webrtc/rtc_base/logging.h"
 #include "webrtc/rtc_base/string_utils.h"
 #include "talk/owt/sdk/base/codecutils.h"
 #include "talk/owt/sdk/base/customizedvideoencoderproxy.h"
@@ -21,6 +22,7 @@ EncodedVideoEncoderFactory::EncodedVideoEncoderFactory() {}
 std::unique_ptr<webrtc::VideoEncoder>
 EncodedVideoEncoderFactory::CreateVideoEncoder(
     const webrtc::SdpVideoFormat& format) {
+  RTC_LOG(LS_ERROR) << "CreateVideoEncoder: " << format.ToString();
   if (absl::EqualsIgnoreCase(format.name, cricket::kVp8CodecName) ||
       absl::EqualsIgnoreCase(format.name, cricket::kVp9CodecName) ||
       absl::EqualsIgnoreCase(format.name, cricket::kH264CodecName)

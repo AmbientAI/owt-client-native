@@ -212,6 +212,21 @@ void CustomizedFramesCapturer::AdjustFrameBuffer(uint32_t size) {
 
 // Executed in the context of CustomizedFramesThread.
 void CustomizedFramesCapturer::ReadFrame() {
+  RTC_LOG(LS_ERROR) << "CustomizedFramesCapturer::ReadFrame()";
+  {
+    AdjustFrameBuffer(100 * 1024);
+    webrtc::VideoFrame pending_frame =
+        webrtc::VideoFrame::Builder()
+            .set_video_frame_buffer(frame_buffer_)
+            .set_timestamp_rtp(0)
+            .set_timestamp_ms(rtc::TimeMillis())
+            .set_rotation(webrtc::kVideoRotation_0)
+            .build();
+
+    pending_frame.set_ntp_time_ms(0);
+    data_callback_->OnFrame(pending_frame);
+  }
+  return;
   // Signal the previously read frame to downstream in worker_thread.
   rtc::CritScope lock(&lock_);
   if (!data_callback_)
