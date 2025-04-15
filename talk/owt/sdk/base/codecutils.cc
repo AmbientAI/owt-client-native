@@ -23,6 +23,7 @@ webrtc::SdpVideoFormat CreateH264Format(webrtc::H264::Profile profile,
        {cricket::kH264FmtpPacketizationMode, packetization_mode}});
 }
 
+// TODO(dtag): Note the following and have it match transcoder output
 std::vector<webrtc::SdpVideoFormat> CodecUtils::SupportedH264Codecs() {
   return {
       CreateH264Format(webrtc::H264::kProfileBaseline, webrtc::H264::kLevel3_1, "1"),
@@ -30,7 +31,7 @@ std::vector<webrtc::SdpVideoFormat> CodecUtils::SupportedH264Codecs() {
       CreateH264Format(webrtc::H264::kProfileConstrainedBaseline, webrtc::H264::kLevel3_1, "1"),
       CreateH264Format(webrtc::H264::kProfileConstrainedBaseline, webrtc::H264::kLevel3_1,
                        "0")};
-}  
+}
 
 #ifndef DISABLE_H265
 std::vector<webrtc::SdpVideoFormat> CodecUtils::GetSupportedH265Codecs() {
