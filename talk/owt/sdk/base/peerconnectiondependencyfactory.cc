@@ -31,6 +31,9 @@
 #if defined(WEBRTC_LINUX) || defined(WEBRTC_WIN)
 #include "talk/owt/sdk/base/customizedvideodecoderfactory.h"
 #endif
+#if defined(WEBRTC_LINUX)
+#include "talk/owt/sdk/base/dualvideoencoder.h"
+#endif
 #include "owt/base/clientconfiguration.h"
 #include "owt/base/globalconfiguration.h"
 using namespace rtc;
@@ -61,6 +64,7 @@ PeerConnectionDependencyFactory::PeerConnectionDependencyFactory()
   network_monitor_ = nullptr;
 #endif
   encoded_frame_ = GlobalConfiguration::GetEncodedVideoFrameEnabled();
+  dual_video_encoder_ = GlobalConfiguration::GetDualVideoEncoderEnabled();
   pc_thread_->SetName("peerconnection_dependency_factory_thread", nullptr);
   pc_thread_->Start();
 }
@@ -150,7 +154,10 @@ void PeerConnectionDependencyFactory::
 
 #elif defined(WEBRTC_LINUX)
   // MSDK support for Linux is not in place. Use default.
-  if (encoded_frame_) {
+  if (dual_video_encoder_) {
+    RTC_LOG(LS_WARNING) << "Using DualVideoEncoder";
+    encoder_factory.reset(new DualVideoEncoder());
+  } else if (encoded_frame_) {
     encoder_factory.reset(new EncodedVideoEncoderFactory());
   } else {
     encoder_factory = webrtc::CreateBuiltinVideoEncoderFactory();
