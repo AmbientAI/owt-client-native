@@ -155,7 +155,7 @@ void PeerConnectionDependencyFactory::
 #elif defined(WEBRTC_LINUX)
   // MSDK support for Linux is not in place. Use default.
   if (dual_video_encoder_) {
-    RTC_LOG(LS_WARNING) << "Using DualVideoEncoder";
+    RTC_LOG(LS_WARNING) << "Using DualVideoEncoder. The EncodedVideoFrameEnabled configuration is ignored.";
     encoder_factory.reset(new DualVideoEncoder());
   } else if (encoded_frame_) {
     encoder_factory.reset(new EncodedVideoEncoderFactory());
