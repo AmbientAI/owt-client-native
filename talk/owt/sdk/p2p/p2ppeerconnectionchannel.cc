@@ -231,6 +231,7 @@ void P2PPeerConnectionChannel::Publish(
       }
     }
   }
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "Getting video tracks";
   for (const auto& track : media_stream->GetVideoTracks()) {
     std::string track_id = track->id();
     {
@@ -244,6 +245,7 @@ void P2PPeerConnectionChannel::Publish(
   }
   {
     std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "Adding stream to pending publish streams";
     pending_publish_streams_.push_back(stream);
   }
   {
@@ -1086,6 +1088,7 @@ bool P2PPeerConnectionChannel::IsStale() {
   return is_stale;
 }
 void P2PPeerConnectionChannel::DrainPendingStreams() {
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "Draining pending streams";
   RTC_LOG(LS_INFO) << "Draining pending stream";
   ChangeSessionState(kSessionStateConnecting);
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
@@ -1156,6 +1159,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         temp_pc_->AddTrack(track, {stream_id});
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
+        RTC_LOG(LS_WARNING) << "[DTAG] " << "Adding video track to peer connection";
         // Signaling.
         stream_tracks.append(track->id());
         stream_sources[kStreamVideoSourceKey] = video_track_source;

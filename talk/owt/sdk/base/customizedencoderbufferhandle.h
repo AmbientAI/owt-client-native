@@ -7,6 +7,7 @@
 #include "rtc_base/ref_count.h"
 #include "talk/owt/sdk/base/nativehandlebuffer.h"
 #include "talk/owt/sdk/include/cpp/owt/base/videoencoderinterface.h"
+#include "owt/base/encodedframegeneratorinterface.h"
 namespace owt {
 namespace base {
 // This structure is to be included in the native handle
@@ -48,6 +49,41 @@ class EncodedFrameBuffer : public VideoFrameBuffer {
   size_t width_;
   size_t height_;
 };
+
+
+
+class EncodedVideoFrameBuffer : public VideoFrameBuffer {
+ public:
+  // EncodedVideoFrameBuffer(std::unique_ptr<EncodedVideoFrameBufferNativeHandle> native_handle)
+  //   : native_handle_(std::move(native_handle))
+  //   , width_(native_handle_ ? native_handle_->width : 0)
+  //   , height_(native_handle_ ? native_handle_->height : 0)
+  // {}
+  EncodedVideoFrameBuffer() {}
+  ~EncodedVideoFrameBuffer() override {}
+  void set_native_handle(std::unique_ptr<EncodedVideoFrameBufferNativeHandle> native_handle)
+  {
+    native_handle_ = std::move(native_handle);
+    width_ = native_handle_ ? native_handle_->width : 0;
+    height_ = native_handle_ ? native_handle_->height : 0;
+  }
+  Type type() const override { return Type::kNative; }
+  int width() const override { return width_; }
+  int height() const override { return height_; }
+  rtc::scoped_refptr<I420BufferInterface> ToI420() override {
+    RTC_NOTREACHED();
+    return nullptr;
+  }
+  void* native_handle() { return native_handle_.get(); }
+ private:
+  std::unique_ptr<EncodedVideoFrameBufferNativeHandle> native_handle_ = nullptr;
+  size_t width_ = 0;
+  size_t height_ = 0;
+};
+
+
+
+
 }  // namespace base
 }  // namespace owt
 #endif
