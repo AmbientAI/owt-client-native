@@ -11,6 +11,7 @@
 #include "media/base/video_adapter.h"
 #include "media/base/video_broadcaster.h"
 #include "modules/video_capture/video_capture.h"
+#include "owt/base/encodedframegeneratorinterface.h"
 #include "owt/base/framegeneratorinterface.h"
 #include "owt/base/localcamerastreamparameters.h"
 #include "owt/base/stream.h"
@@ -30,6 +31,8 @@ class CustomizedVideoCapturerFactory {
   static rtc::scoped_refptr<webrtc::VideoCaptureModule> Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       std::unique_ptr<VideoFrameGeneratorInterface> framer);
+  static rtc::scoped_refptr<webrtc::VideoCaptureModule> Create(
+      std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator);
   static rtc::scoped_refptr<webrtc::VideoCaptureModule> Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       VideoEncoderInterface* encoder);
@@ -69,6 +72,8 @@ class CustomizedCapturer : public CustomizedVideoSource,
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       std::unique_ptr<VideoFrameGeneratorInterface> framer);
   static CustomizedCapturer* Create(
+      std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator);
+  static CustomizedCapturer* Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       VideoEncoderInterface* encoder);
 #if defined(WEBRTC_WIN)
@@ -85,6 +90,7 @@ class CustomizedCapturer : public CustomizedVideoSource,
   CustomizedCapturer();
   bool Init(std::shared_ptr<LocalCustomizedStreamParameters> parameters,
             std::unique_ptr<VideoFrameGeneratorInterface> framer);
+  bool Init(std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator);
   bool Init(std::shared_ptr<LocalCustomizedStreamParameters> parameters,
             VideoEncoderInterface* encoder);
 #if defined(WEBRTC_WIN)
@@ -103,6 +109,7 @@ class LocalRawCaptureTrackSource : public webrtc::VideoTrackSource {
   static rtc::scoped_refptr<LocalRawCaptureTrackSource> Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       std::unique_ptr<VideoFrameGeneratorInterface> framer) {
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "LocalRawCaptureTrackSource::Create() creating CustomizedCapturer";
     std::unique_ptr<CustomizedCapturer> capturer;
     capturer = absl::WrapUnique(
         CustomizedCapturer::Create(parameters, std::move(framer)));
@@ -178,6 +185,36 @@ class LocalEncodedCaptureTrackSource : public webrtc::VideoTrackSource {
 
  private:
   rtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
+    return capturer_.get();
+  }
+  std::unique_ptr<CustomizedCapturer> capturer_;
+};
+
+class LocalEncodedVideoFrameTrackSource : public webrtc::VideoTrackSource {
+ public:
+  static rtc::scoped_refptr<LocalEncodedVideoFrameTrackSource> Create(
+      std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator) {
+    std::unique_ptr<CustomizedCapturer> capturer(nullptr);
+    capturer =
+        absl::WrapUnique(CustomizedCapturer::Create(std::move(generator)));
+
+    // if (capturer)
+    //   return new rtc::RefCountedObject<LocalEncodedVideoFrameTrackSource>(
+    //       std::move(capturer));
+
+    // return nullptr;
+    return new rtc::RefCountedObject<LocalEncodedVideoFrameTrackSource>(
+        std::move(capturer));
+  }
+
+ protected:
+  explicit LocalEncodedVideoFrameTrackSource(
+      std::unique_ptr<CustomizedCapturer> capturer)
+      : VideoTrackSource(/*remote=*/false), capturer_(std::move(capturer)) {}
+
+ private:
+  rtc::VideoSourceInterface<webrtc::VideoFrame>* source() override {
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "LocalEncodedVideoFrameTrackSource::source()";
     return capturer_.get();
   }
   std::unique_ptr<CustomizedCapturer> capturer_;

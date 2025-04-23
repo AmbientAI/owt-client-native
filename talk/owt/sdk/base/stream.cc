@@ -375,6 +375,12 @@ std::shared_ptr<LocalStream> LocalStream::Create(
   return stream;
 }
 std::shared_ptr<LocalStream> LocalStream::Create(
+    std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator) {
+  std::shared_ptr<LocalStream> stream(
+      new LocalStream(std::move(generator)));
+  return stream;
+}
+std::shared_ptr<LocalStream> LocalStream::Create(
     std::shared_ptr<LocalCustomizedStreamParameters> parameters,
     VideoEncoderInterface* encoder) {
   std::shared_ptr<LocalStream> stream(new LocalStream(parameters, encoder));
@@ -533,24 +539,29 @@ LocalStream::LocalStream(
 LocalStream::LocalStream(
     std::shared_ptr<LocalCustomizedStreamParameters> parameters,
     std::unique_ptr<VideoFrameGeneratorInterface> framer) {
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "LocalStream::constructor(params, framer)";
   if (!parameters->VideoEnabled() && !parameters->AudioEnabled()) {
     RTC_LOG(LS_WARNING)
         << "Create Local Camera Stream without video and audio.";
   }
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "Creating or getting peer connection dependency factory";
   scoped_refptr<PeerConnectionDependencyFactory> pcd_factory =
       PeerConnectionDependencyFactory::Get();
   std::string media_stream_id("MediaStream-" + rtc::CreateRandomUuid());
   Id(media_stream_id);
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "Creating local media stream from pcd factory";
   scoped_refptr<MediaStreamInterface> stream =
       pcd_factory->CreateLocalMediaStream(media_stream_id);
   std::unique_ptr<CustomizedFramesCapturer> capturer(nullptr);
   if (parameters->VideoEnabled()) {
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "Creating local raw capture track source";
     rtc::scoped_refptr<LocalRawCaptureTrackSource> video_device =
         LocalRawCaptureTrackSource::Create(parameters, std::move(framer));
     if (video_device) {
       std::string video_track_id("VideoTrack-" + rtc::CreateRandomUuid());
       rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track =
           pcd_factory->CreateLocalVideoTrack(video_track_id, video_device);
+      RTC_LOG(LS_WARNING) << "[DTAG] " << "Adding video track to media stream";
       stream->AddTrack(video_track);
     }
   }
@@ -563,6 +574,31 @@ LocalStream::LocalStream(
   media_stream_ = stream;
   media_stream_->AddRef();
 }
+
+LocalStream::LocalStream(
+    std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator)
+{
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "LocalStream::constructor(params, generator)";
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "Creating or getting peer connection dependency factory";
+  scoped_refptr<PeerConnectionDependencyFactory> pcd_factory =
+      PeerConnectionDependencyFactory::Get();
+  std::string media_stream_id("MediaStream-" + rtc::CreateRandomUuid());
+  Id(media_stream_id);
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "Creating local media stream from pcd factory";
+  scoped_refptr<MediaStreamInterface> stream =
+      pcd_factory->CreateLocalMediaStream(media_stream_id);
+  rtc::scoped_refptr<LocalEncodedVideoFrameTrackSource> video_device =
+        LocalEncodedVideoFrameTrackSource::Create(std::move(generator));
+  if (video_device) {
+    std::string video_track_id("VideoTrack-" + rtc::CreateRandomUuid());
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track =
+      pcd_factory->CreateLocalVideoTrack(video_track_id, video_device);
+    stream->AddTrack(video_track);
+  }
+  media_stream_ = stream;
+  media_stream_->AddRef();
+}
+
 LocalStream::LocalStream(
     std::shared_ptr<LocalCustomizedStreamParameters> parameters,
     VideoEncoderInterface* encoder) {

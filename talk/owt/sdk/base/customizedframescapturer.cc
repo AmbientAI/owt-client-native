@@ -84,7 +84,27 @@ CustomizedFramesCapturer::CustomizedFramesCapturer(
       bitrate_kbps_(0),
       frame_type_(frame_generator_->GetType()),
       frame_buffer_capacity_(0),
-      frame_buffer_(nullptr) {}
+      frame_buffer_(nullptr),
+      encoded_frame_buffer_(nullptr)
+{
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::CustomizedFramesCapturer(raw_frameGenerator)";
+}
+
+CustomizedFramesCapturer::CustomizedFramesCapturer(
+    std::unique_ptr<EncodedVideoFrameGeneratorInterface> encodedFrameGenerator)
+    : frame_generator_(nullptr),
+      encoded_frame_generator_(std::move(encodedFrameGenerator)),
+      encoder_(nullptr),
+      width_(320),
+      height_(240),
+      fps_(30),
+      bitrate_kbps_(0),
+      frame_buffer_capacity_(0),
+      frame_buffer_(nullptr),
+      encoded_frame_buffer_(new rtc::RefCountedObject<owt::base::EncodedVideoFrameBuffer>())
+{
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::CustomizedFramesCapturer(encodedFrameGenerator)";
+}
 CustomizedFramesCapturer::CustomizedFramesCapturer(
     int width,
     int height,
@@ -98,7 +118,8 @@ CustomizedFramesCapturer::CustomizedFramesCapturer(
       fps_(fps),
       bitrate_kbps_(bitrate_kbps),
       frame_buffer_capacity_(0),
-      frame_buffer_(nullptr) {}
+      frame_buffer_(nullptr),
+      encoded_frame_buffer_(nullptr) {}
 CustomizedFramesCapturer::~CustomizedFramesCapturer() {
   DeRegisterCaptureDataCallback();
   StopCapture();
@@ -111,6 +132,7 @@ CustomizedFramesCapturer::~CustomizedFramesCapturer() {
 
 void CustomizedFramesCapturer::RegisterCaptureDataCallback(
     rtc::VideoSinkInterface<webrtc::VideoFrame>* dataCallback){
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::RegisterCaptureDataCallback() registering capture data callback";
   rtc::CritScope lock(&lock_);
   data_callback_ = dataCallback;
 }
@@ -122,6 +144,7 @@ void CustomizedFramesCapturer::DeRegisterCaptureDataCallback() {
 
 int32_t CustomizedFramesCapturer::StartCapture(
     const webrtc::VideoCaptureCapability& capability) {
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::StartCapture() starting capture";
   rtc::CritScope lock(&capture_lock_);
   if (capture_started_)
     return 0;
@@ -155,6 +178,9 @@ int32_t CustomizedFramesCapturer::StopCapture() {
 void CustomizedFramesCapturer::CleanupGenerator() {
   if (frame_generator_) {
     frame_generator_->Cleanup();
+  }
+  if (encoded_frame_generator_) {
+    encoded_frame_generator_->Cleanup();
   }
 }
 
@@ -212,6 +238,7 @@ void CustomizedFramesCapturer::AdjustFrameBuffer(uint32_t size) {
 
 // Executed in the context of CustomizedFramesThread.
 void CustomizedFramesCapturer::ReadFrame() {
+  RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::ReadFrame() reading frame";
   // Signal the previously read frame to downstream in worker_thread.
   rtc::CritScope lock(&lock_);
   if (!data_callback_)
@@ -236,6 +263,53 @@ void CustomizedFramesCapturer::ReadFrame() {
             .build();
 
     capture_frame.set_ntp_time_ms(0);
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::ReadFrame() calling data callback";
+    data_callback_->OnFrame(capture_frame);
+  } else if (encoded_frame_generator_ != nullptr) {
+    std::unique_ptr<owt::base::EncodedVideoFrameBufferNativeHandle> encoded_frame = encoded_frame_generator_->GenerateNextEncodedFrame();
+    if (!encoded_frame) {
+      RTC_LOG(LS_ERROR) << "[DTAG] " << "CustomizedFramesCapturer::ReadFrame() failed to generate encoded frame";
+      return;
+    }
+
+    // TODO(dtag): I think this is causing a memory leak. Understand
+    // the liftime of this buffer. Ownerhsip is passed to the webrtc::VideoFrame
+    // and I think the video_stream_encoder.cc is making copies.
+    // Why can we use a single buffer for the frame generator?
+    // rtc::scoped_refptr<owt::base::EncodedVideoFrameBuffer> buffer =
+    //     new rtc::RefCountedObject<owt::base::EncodedVideoFrameBuffer>(); //std::move(encoded_frame));
+    encoded_frame_buffer_->set_native_handle(std::move(encoded_frame));
+
+    // rtc::scoped_refptr<webrtc::I420Buffer> buf = webrtc::I420Buffer::Create(320, 240);
+    // webrtc::I420Buffer::SetBlack(buf.get());
+
+    // // 2) Your orange YUV values
+    // const uint8_t kY = 173, kU =  43, kV = 200;
+
+    // // 3) Fill Y plane (full resolution)
+    // for (int y = 0; y < 240; ++y) {
+    //   memset(buf->MutableDataY() + y * buf->StrideY(), kY, 320);
+    // }
+
+    // // 4) Fill U & V planes (half‐res in each dimension)
+    // const int chroma_h = 240 / 2;
+    // const int chroma_w = 320  / 2;
+    // for (int y = 0; y < chroma_h; ++y) {
+    //   memset(buf->MutableDataU() + y * buf->StrideU(), kU, chroma_w);
+    //   memset(buf->MutableDataV() + y * buf->StrideV(), kV, chroma_w);
+    // }
+
+
+    webrtc::VideoFrame capture_frame =
+        webrtc::VideoFrame::Builder()
+            .set_video_frame_buffer(encoded_frame_buffer_) // buf
+            .set_timestamp_rtp(0)
+            .set_timestamp_ms(rtc::TimeMillis())
+            .set_ntp_time_ms(0)
+            .set_rotation(webrtc::kVideoRotation_0)
+            .build();
+
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::ReadFrame() calling data callback with dummy frame";
     data_callback_->OnFrame(capture_frame);
   } else if (encoder_ != nullptr) {  // video encoder interface used. Pass the
                                      // encoder information.
@@ -259,6 +333,7 @@ void CustomizedFramesCapturer::ReadFrame() {
             .build();
 
     pending_frame.set_ntp_time_ms(0);
+    RTC_LOG(LS_WARNING) << "[DTAG] " << "CustomizedFramesCapturer::ReadFrame() calling data callback with fake frame";
     data_callback_->OnFrame(pending_frame);
   }
 }

@@ -12,6 +12,7 @@
 #include "owt/base/macros.h"
 #include "owt/base/options.h"
 #include "owt/base/videoencoderinterface.h"
+#include "owt/base/encodedframegeneratorinterface.h"
 //#include "owt/base/videorendererinterface.h"
 #include "owt/base/audioplayerinterface.h"
 namespace webrtc {
@@ -226,6 +227,8 @@ class LocalStream : public Stream {
   static std::shared_ptr<LocalStream> Create(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       std::unique_ptr<VideoFrameGeneratorInterface> framer);
+  static std::shared_ptr<LocalStream> Create(
+      std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator);
   /**
     @briefInitialize a local customized stream with parameters and encoder
     interface.
@@ -265,6 +268,8 @@ class LocalStream : public Stream {
   explicit LocalStream(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       std::unique_ptr<VideoFrameGeneratorInterface> framer);
+  explicit LocalStream(
+      std::unique_ptr<EncodedVideoFrameGeneratorInterface> generator);
   explicit LocalStream(
       std::shared_ptr<LocalCustomizedStreamParameters> parameters,
       VideoEncoderInterface* encoder);

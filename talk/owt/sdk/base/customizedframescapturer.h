@@ -26,8 +26,10 @@
 #include "webrtc/rtc_base/string_utils.h"
 #include "webrtc/rtc_base/thread_annotations.h"
 #include "webrtc/rtc_base/constructor_magic.h"
+#include "owt/base/encodedframegeneratorinterface.h"
 #include "owt/base/framegeneratorinterface.h"
 #include "owt/base/videoencoderinterface.h"
+#include "talk/owt/sdk/base/customizedencoderbufferhandle.h"
 
 namespace owt {
 namespace base {
@@ -37,6 +39,8 @@ class CustomizedFramesCapturer : public webrtc::VideoCaptureModule {
  public:
   CustomizedFramesCapturer(
       std::unique_ptr<VideoFrameGeneratorInterface> rawFrameGenerator);
+  CustomizedFramesCapturer(
+      std::unique_ptr<EncodedVideoFrameGeneratorInterface> encodedFrameGenerator);
   CustomizedFramesCapturer(int width,
                            int height,
                            int fps,
@@ -57,8 +61,8 @@ class CustomizedFramesCapturer : public webrtc::VideoCaptureModule {
   virtual bool CaptureStarted() override;
   virtual int32_t CaptureSettings(webrtc::VideoCaptureCapability& settings) override;
   virtual int32_t SetCaptureRotation(webrtc::VideoRotation rotation) override;
-  virtual bool SetApplyRotation(bool enable) override { 
-    return false; 
+  virtual bool SetApplyRotation(bool enable) override {
+    return false;
   }
   virtual bool GetApplyRotation() override {
     return false;
@@ -79,6 +83,7 @@ class CustomizedFramesCapturer : public webrtc::VideoCaptureModule {
 
   rtc::VideoSinkInterface<webrtc::VideoFrame>* data_callback_;
   std::unique_ptr<VideoFrameGeneratorInterface> frame_generator_;
+  std::unique_ptr<EncodedVideoFrameGeneratorInterface> encoded_frame_generator_;
   VideoEncoderInterface* encoder_;
   std::unique_ptr<CustomizedFramesThread> frames_generator_thread_;
   int width_;
@@ -90,6 +95,7 @@ class CustomizedFramesCapturer : public webrtc::VideoCaptureModule {
   uint32_t frame_buffer_capacity_;
   rtc::scoped_refptr<webrtc::I420Buffer>
       frame_buffer_;  // Reuseable buffer for video frames.
+  rtc::scoped_refptr<owt::base::EncodedVideoFrameBuffer> encoded_frame_buffer_;
 
   rtc::CriticalSection lock_;
   rtc::CriticalSection capture_lock_;
