@@ -950,6 +950,11 @@ void P2PPeerConnectionChannel::Stop(
       ChangeSessionState(kSessionStateReady);
       break;
     default:
+      // Even if session hasn't fully started, we must close the peer connection
+      // to release UDP sockets allocated during ICE gathering.
+      RTC_LOG(LS_WARNING) << "Stop called on session in state " << session_state_
+                          << ", closing peer connection to release resources.";
+      ClosePeerConnection();
       if (on_failure != nullptr) {
         std::unique_ptr<Exception> e(
             new Exception(ExceptionType::kP2PClientInvalidState,
