@@ -52,6 +52,11 @@ int CustomizedVideoEncoderProxy::InitEncode(
 int32_t CustomizedVideoEncoderProxy::Encode(
     const webrtc::VideoFrame& input_image,
     const std::vector<webrtc::VideoFrameType>* frame_types) {
+  if (!encode_called_) {
+    encode_called_ = true;
+    RTC_LOG(LS_ERROR) << "[DBG] CustomizedVideoEncoderProxy::Encode FIRST CALL proxy=" << this
+                      << " external_encoder_=" << external_encoder_;
+  }
   // Get the videoencoderinterface instance from the input video frame.
   CustomizedEncoderBufferHandle* encoder_buffer_handle =
       reinterpret_cast<CustomizedEncoderBufferHandle*>(

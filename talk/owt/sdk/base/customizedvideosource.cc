@@ -5,6 +5,7 @@
 #include "talk/owt/sdk/base/customizedframescapturer.h"
 #include "talk/owt/sdk/base/desktopcapturer.h"
 #include "talk/owt/sdk/base/customizedvideosource.h"
+#include "webrtc/rtc_base/logging.h"
 
 namespace owt {
 namespace base {
@@ -55,11 +56,13 @@ CustomizedVideoCapturerFactory::Create(
   void CustomizedVideoSource::AddOrUpdateSink(
       rtc::VideoSinkInterface<webrtc::VideoFrame> * sink,
       const rtc::VideoSinkWants& wants) {
+    RTC_LOG(LS_ERROR) << "[DBG] CustomizedVideoSource::AddOrUpdateSink source=" << this << " sink=" << sink;
     broadcaster_.AddOrUpdateSink(sink, wants);
     UpdateVideoAdapter();
   }
   void CustomizedVideoSource::RemoveSink(
       rtc::VideoSinkInterface<webrtc::VideoFrame> * sink) {
+    RTC_LOG(LS_ERROR) << "[DBG] CustomizedVideoSource::RemoveSink source=" << this << " sink=" << sink;
     broadcaster_.RemoveSink(sink);
     UpdateVideoAdapter();
   }

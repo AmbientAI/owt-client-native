@@ -254,7 +254,14 @@ void P2PPeerConnectionChannel::Publish(
   if (on_success) {
     on_success();
   }
-  DrainPendingStreams();
+  // For encoded (packet passthrough) streams, defer AddTrack() until signaling
+  // is stable. Calling AddTrack() during have-local-offer breaks the video
+  // send stream setup and AddOrUpdateSink is never called on the video source.
+  // OnSignalingChange(kStable) will call DrainPendingStreams() once stable.
+  if (!stream->IsEncoded() ||
+      temp_pc_->signaling_state() == webrtc::PeerConnectionInterface::kStable) {
+    DrainPendingStreams();
+  }
 }
 void P2PPeerConnectionChannel::Send(
     const std::string& message,
@@ -612,7 +619,12 @@ void P2PPeerConnectionChannel::OnSignalingChange(
         pending_remote_sdp_.reset();
         peer_connection_->SetRemoteDescription(std::move(new_desc), observer);
       } else {
-        DrainPendingStreams();
+        // Post DrainPendingStreams asynchronously so AddTrack() is not called
+        // from within the WebRTC signaling callback. Calling AddTrack() from
+        // within OnSignalingChange causes WebRTC to produce an offer with an
+        // empty a=msid-semantic, preventing the video send stream from being
+        // activated (AddOrUpdateSink never called on the video source).
+        event_queue_->PostTask([this] { DrainPendingStreams(); });
       }
       DrainPendingRemoteCandidates();
       break;

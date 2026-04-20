@@ -214,8 +214,10 @@ void CustomizedFramesCapturer::AdjustFrameBuffer(uint32_t size) {
 void CustomizedFramesCapturer::ReadFrame() {
   // Signal the previously read frame to downstream in worker_thread.
   rtc::CritScope lock(&lock_);
-  if (!data_callback_)
+  if (!data_callback_) {
+    RTC_LOG(LS_ERROR) << "[DBG] CustomizedFramesCapturer::ReadFrame: data_callback_ is null, capturer=" << this;
     return;
+  }
   if (frame_generator_ != nullptr) {
     auto frame_size = frame_generator_->GetNextFrameSize();
     AdjustFrameBuffer(frame_size);
