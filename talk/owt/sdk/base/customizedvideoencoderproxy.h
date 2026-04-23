@@ -42,7 +42,6 @@ class CustomizedVideoEncoderProxy : public webrtc::VideoEncoder {
   VideoEncoderInterface* external_encoder_;
   uint8_t gof_idx_;
   webrtc::GofInfoVP9 gof_;
-  bool encode_called_ = false;
 };
 }
 }
