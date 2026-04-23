@@ -66,6 +66,14 @@ class GlobalConfiguration {
   }
   /** @endcond */
   /**
+   @brief This function sets the video encoder to be a custom video encoder that
+   supports both raw and encoded video frames.
+   @param enabled Dual video encoder is enabled or not.
+   */
+  static void SetDualVideoEncoderEnabled(bool enabled) {
+    dual_video_encoder_ = enabled;
+  }
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -172,6 +180,13 @@ class GlobalConfiguration {
      return encoded_frame_;
   }
   /**
+   @brief This function gets whether the dual video encoder is enabled or not.
+   @return true or false.
+   */
+  static bool GetDualVideoEncoderEnabled() {
+    return dual_video_encoder_;
+  }
+  /**
    @brief This function gets whether the customized audio input is enabled or not.
    @return true or false.
    */
@@ -220,6 +235,11 @@ class GlobalConfiguration {
    * be published.
    */
   static bool encoded_frame_;
+  /**
+   * Default is false. If it is set to true, uses a dual video encoder that
+   * supports both raw and encoded video frames.
+   */
+  static bool dual_video_encoder_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not

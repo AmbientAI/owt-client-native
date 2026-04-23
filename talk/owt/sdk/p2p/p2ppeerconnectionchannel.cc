@@ -151,6 +151,18 @@ rtc::scoped_refptr<webrtc::PeerConnectionInterface> P2PPeerConnectionChannel::Ge
   return temp_pc_;
 }
 
+void P2PPeerConnectionChannel::ClearPendingStreams() {
+  RTC_LOG(LS_INFO) << "Clearing pending streams.";
+  {
+    std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
+    pending_publish_streams_.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
+    pending_unpublish_streams_.clear();
+  }
+}
+
 void P2PPeerConnectionChannel::Publish(
     std::shared_ptr<LocalStream> stream,
     std::function<void()> on_success,
@@ -158,6 +170,19 @@ void P2PPeerConnectionChannel::Publish(
   RTC_LOG(LS_INFO) << "Publishing a local stream.";
   // Add reference to peer connection until end of function.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_) {
+    RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    // Skip on_success callback because we haven't published anything.
+    ClearPendingStreams();
+    if (on_failure) {
+      std::unique_ptr<Exception> e(
+          new Exception(ExceptionType::kP2PClientRemoteNotExisted,
+                        "Peer connection closed."));
+      on_failure(std::move(e));
+    }
+    return;
+  }
+
   if (!CheckNullPointer((uintptr_t)stream.get(), on_failure)) {
     RTC_LOG(LS_INFO) << "Local stream cannot be nullptr.";
     return;
@@ -431,7 +456,11 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
   RTC_LOG(LS_INFO) << "Received message type: " << type;
   // Store reference so peer_connection_ is not deleted until function ends
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
-  if (!temp_pc_) { return; }
+  if (!temp_pc_) {
+    RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    return;
+  }
+
   if (type == "offer" || type == "answer") {
     if (type == "offer" && session_state_ == kSessionStateMatched) {
       ChangeSessionState(kSessionStateConnecting);
@@ -490,7 +519,17 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
                             &sdp_mline_index);
     webrtc::IceCandidateInterface* ice_candidate = webrtc::CreateIceCandidate(
         sdp_mid, sdp_mline_index, candidate, nullptr);
-    temp_pc_->AddIceCandidate(ice_candidate);
+    if (temp_pc_->remote_description()){
+      if (!temp_pc_->AddIceCandidate(ice_candidate)) {
+        RTC_LOG(LS_WARNING) << "Failed to add remote candidate.";
+      }
+    } else{
+      rtc::CritScope cs(&pending_remote_candidates_crit_);
+      pending_remote_candidates_.push_back(
+          std::unique_ptr<webrtc::IceCandidateInterface>(ice_candidate));
+      RTC_LOG(LS_INFO) << "Remote candidate is stored because remote "
+                             "session description is missing.";
+    }
   }
 }
 void P2PPeerConnectionChannel::OnMessageTracksAdded(
@@ -536,11 +575,18 @@ void P2PPeerConnectionChannel::OnMessageStreamInfo(Json::Value& stream_info) {
 void P2PPeerConnectionChannel::OnSignalingChange(
     PeerConnectionInterface::SignalingState new_state) {
   RTC_LOG(LS_INFO) << "Signaling state changed: " << new_state;
-  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
+
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_) {
+    RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    ClearPendingStreams();
+    return;
+  }
+
   switch (new_state) {
     case PeerConnectionInterface::SignalingState::kStable:
       if (pending_remote_sdp_) {
-	RTC_LOG(LS_INFO) << "Retrying SetRemoteDescription from kStable state";
+        RTC_LOG(LS_INFO) << "Retrying SetRemoteDescription from kStable state";
         scoped_refptr<FunctionalSetRemoteDescriptionObserver> observer =
             FunctionalSetRemoteDescriptionObserver::Create(std::bind(
                 &P2PPeerConnectionChannel::OnSetRemoteDescriptionComplete, this,
@@ -568,6 +614,10 @@ void P2PPeerConnectionChannel::OnSignalingChange(
       } else {
         DrainPendingStreams();
       }
+      DrainPendingRemoteCandidates();
+      break;
+    case PeerConnectionInterface::SignalingState::kHaveRemoteOffer:
+      DrainPendingRemoteCandidates();
       break;
     default:
       break;
@@ -754,9 +804,11 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     is_creating_offer_ = false;
   }
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_)
   {
-    std::lock_guard<std::mutex> lock(ended_mutex_);
-    if (ended_) { return; }
+    RTC_LOG(LS_INFO) << "Peer connection is closed, returning.";
+    return;
   }
   // Setting maximum bandwidth here.
   ApplyBitrateSettings();
@@ -823,6 +875,19 @@ void P2PPeerConnectionChannel::Unpublish(
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_) {
+    RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
+    // Skip on_success callback because technically we did not unpublish anything.
+    ClearPendingStreams();
+    if (on_failure) {
+      std::unique_ptr<Exception> e(
+          new Exception(ExceptionType::kP2PClientRemoteNotExisted,
+                        "Peer connection closed."));
+      on_failure(std::move(e));
+    }
+    return;
+  }
+
   if (!CheckNullPointer((uintptr_t)stream.get(), on_failure)) {
     RTC_LOG(LS_WARNING) << "Local stream cannot be nullptr.";
     return;
@@ -1073,7 +1138,6 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       if (stream->Source().video == owt::base::VideoSourceInfo::kScreenCast) {
         video_track_source = "screen-cast";
       }
-      RTC_CHECK(temp_pc_);
       // Collect stream and tracks information.
       rtc::scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
@@ -1121,22 +1185,23 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           stream->MediaStream();
       RTC_CHECK(temp_pc_);
       for (const auto& track : media_stream->GetAudioTracks()) {
-        const auto& senders = temp_pc_->GetSenders();
-        for (auto& s : senders) {
-          const auto& t = s->track();
-          if (t != nullptr && t->id() == track->id()) {
-            temp_pc_->RemoveTrack(s);
+        const auto& transceivers = temp_pc_->GetTransceivers();
+        for (auto& transceiver : transceivers) {
+          const auto& ttrack = transceiver->sender()->track();
+          if (ttrack != nullptr && ttrack->id() == track->id()) {
+            temp_pc_->RemoveTrack(transceiver->sender());
+            transceiver->Stop();
             break;
           }
         }
-
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
-        const auto& senders = temp_pc_->GetSenders();
-        for (auto& s : senders) {
-          const auto& t = s->track();
-          if (t != nullptr && t->id() == track->id()) {
-            temp_pc_->RemoveTrack(s);
+        const auto& transceivers = temp_pc_->GetTransceivers();
+        for (auto& transceiver : transceivers) {
+          const auto& ttrack = transceiver->sender()->track();
+          if (ttrack != nullptr && ttrack->id() == track->id()) {
+            temp_pc_->RemoveTrack(transceiver->sender());
+            transceiver->Stop();
             break;
           }
         }
@@ -1179,6 +1244,10 @@ void P2PPeerConnectionChannel::ClosePeerConnection() {
     {
       std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
       pending_publish_streams_.clear();
+    }
+    {
+      rtc::CritScope cs(&pending_remote_candidates_crit_);
+      pending_remote_candidates_.clear();
     }
     TriggerOnStopped();
   }
@@ -1273,6 +1342,21 @@ void P2PPeerConnectionChannel::DrainPendingMessages() {
     for (const auto& msg : messages_snapshot) {
       temp_dc_->Send(CreateDataBuffer(msg));
     }
+  }
+}
+void P2PPeerConnectionChannel::DrainPendingRemoteCandidates() {
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  // If we didn't get a connection ref, that means that the connection already got closed
+  // and pending remote candidates have already been cleared.
+  if (temp_pc_ && temp_pc_->remote_description()) {
+    rtc::CritScope cs(&pending_remote_candidates_crit_);
+    RTC_LOG(LS_INFO) << "Draining pending ICE Candidates, received " << pending_remote_candidates_.size();
+    for (const auto& ice_candidate : pending_remote_candidates_) {
+      if (!temp_pc_->AddIceCandidate(ice_candidate.get())) {
+        RTC_LOG(LS_WARNING) << "Failed to add remote candidate.";
+      }
+    }
+    pending_remote_candidates_.clear();
   }
 }
 Json::Value P2PPeerConnectionChannel::UaInfo() {

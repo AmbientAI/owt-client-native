@@ -4,6 +4,7 @@
 #ifndef OWT_BASE_ENCODEDVIDEOENCODER_H_
 #define OWT_BASE_ENCODEDVIDEOENCODER_H_
 #include <vector>
+#include "modules/video_coding/codecs/vp9/include/vp9_globals.h"
 #include "webrtc/api/video_codecs/video_encoder.h"
 #include "webrtc/media/base/codec.h"
 #include "talk/owt/sdk/include/cpp/owt/base/videoencoderinterface.h"
@@ -41,6 +42,7 @@ class CustomizedVideoEncoderProxy : public webrtc::VideoEncoder {
   VideoEncoderInterface* external_encoder_;
   uint8_t gof_idx_;
   webrtc::GofInfoVP9 gof_;
+  bool encode_called_ = false;
 };
 }
 }

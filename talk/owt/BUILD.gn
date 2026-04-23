@@ -115,6 +115,8 @@ static_library("owt_sdk_base") {
       "sdk/base/customizedvideoencoderproxy.h",
       "sdk/base/customizedvideosource.cc",
       "sdk/base/customizedvideosource.h",
+      "sdk/base/dualvideoencoder.cc",
+      "sdk/base/dualvideoencoder.h",
       "sdk/base/encodedvideoencoderfactory.cc",
       "sdk/base/encodedvideoencoderfactory.h",
       "sdk/base/webrtcvideorendererimpl.cc",
