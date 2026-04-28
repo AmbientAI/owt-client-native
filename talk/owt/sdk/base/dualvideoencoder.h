@@ -21,6 +21,7 @@ class DualVideoEncoder : public webrtc::VideoEncoderFactory {
   webrtc::VideoEncoderFactory::CodecInfo QueryVideoEncoder(const webrtc::SdpVideoFormat& format) const override;
  private:
   std::unique_ptr<webrtc::VideoEncoderFactory> builtin_encoder_factory_;
+  std::unique_ptr<webrtc::VideoEncoderFactory> encoded_encoder_factory_;
 };
 
 

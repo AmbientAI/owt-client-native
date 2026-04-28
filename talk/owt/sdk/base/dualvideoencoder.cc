@@ -195,17 +195,17 @@ class HybridVideoEncoder : public webrtc::VideoEncoder {
 
 
 DualVideoEncoder::DualVideoEncoder()
-    : builtin_encoder_factory_(webrtc::CreateBuiltinVideoEncoderFactory())
+    : builtin_encoder_factory_(webrtc::CreateBuiltinVideoEncoderFactory()),
+      encoded_encoder_factory_(std::make_unique<EncodedVideoEncoderFactory>())
 {}
 
 
 std::unique_ptr<webrtc::VideoEncoder> DualVideoEncoder::CreateVideoEncoder(
     const webrtc::SdpVideoFormat& format
 ) {
-    EncodedVideoEncoderFactory encoded_encoder_factory;
     return std::make_unique<HybridVideoEncoder>(
         builtin_encoder_factory_->CreateVideoEncoder(format),
-        encoded_encoder_factory.CreateVideoEncoder(format));
+        encoded_encoder_factory_->CreateVideoEncoder(format));
 }
 
 
@@ -213,8 +213,7 @@ std::vector<webrtc::SdpVideoFormat> DualVideoEncoder::GetSupportedFormats() cons
 {
     std::vector<webrtc::SdpVideoFormat> supported_formats =
         builtin_encoder_factory_->GetSupportedFormats();
-    EncodedVideoEncoderFactory encoded_encoder_factory;
-    for (const auto& format : encoded_encoder_factory.GetSupportedFormats()) {
+    for (const auto& format : encoded_encoder_factory_->GetSupportedFormats()) {
         bool already_present = false;
         for (const auto& existing_format : supported_formats) {
             if (existing_format.name == format.name &&
