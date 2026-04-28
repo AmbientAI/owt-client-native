@@ -36,8 +36,14 @@ class HybridVideoEncoder : public webrtc::VideoEncoder {
     has_codec_settings_ = true;
     number_of_cores_ = number_of_cores;
     max_payload_size_ = max_payload_size;
-    encoded_encoder_initialized_ = false;
-    raw_encoder_initialized_ = false;
+    if (raw_encoder_initialized_ && raw_encoder_) {
+      raw_encoder_->Release();
+      raw_encoder_initialized_ = false;
+    }
+    if (encoded_encoder_initialized_ && encoded_encoder_) {
+      encoded_encoder_->Release();
+      encoded_encoder_initialized_ = false;
+    }
     return WEBRTC_VIDEO_CODEC_OK;
   }
 
