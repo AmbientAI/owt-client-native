@@ -125,6 +125,12 @@ class HybridVideoEncoder : public webrtc::VideoEncoder {
       info = raw_encoder_->GetEncoderInfo();
     } else if (encoded_encoder_ != nullptr) {
       info = encoded_encoder_->GetEncoderInfo();
+      // The hybrid encoder may receive EncodedFrameBuffer instances whose
+      // ToI420() intentionally aborts. Advertise that contract explicitly so
+      // WebRTC does not try to adapt/scale native encoded frames before Encode()
+      // gets a chance to dispatch them to the passthrough encoder.
+      info.scaling_settings = VideoEncoder::ScalingSettings::kOff;
+      info.has_trusted_rate_controller = false;
     }
     info.supports_native_handle = true;
     info.implementation_name = "OWTDualVideoEncoder";
