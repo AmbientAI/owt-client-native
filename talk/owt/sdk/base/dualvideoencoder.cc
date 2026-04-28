@@ -54,10 +54,6 @@ class HybridVideoEncoder : public webrtc::VideoEncoder {
       return encoded_encoder_->Encode(input_image, frame_types);
     }
 
-    if (raw_encoder_ == nullptr) {
-      RTC_LOG(LS_ERROR) << "Raw video frame received without a raw encoder.";
-      return WEBRTC_VIDEO_CODEC_ERROR;
-    }
     if (!EnsureEncoderInitialized(raw_encoder_.get(), raw_encoder_initialized_)) {
       RTC_LOG(LS_ERROR) << "Failed to initialize raw video encoder.";
       return WEBRTC_VIDEO_CODEC_ERROR;
