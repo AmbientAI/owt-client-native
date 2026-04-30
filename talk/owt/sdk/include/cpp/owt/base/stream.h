@@ -274,6 +274,15 @@ class LocalStream : public Stream {
                        std::unique_ptr<LocalScreenStreamObserver> observer);
 #endif
 
+ public:
+  bool IsEncoded() const {
+#if defined(WEBRTC_WIN) || defined(WEBRTC_LINUX)
+    return encoded_;
+#else
+    return false;
+#endif
+  }
+
  private:
 #if defined(WEBRTC_WIN) || defined(WEBRTC_LINUX)
   bool encoded_ = false;
