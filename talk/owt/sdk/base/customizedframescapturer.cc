@@ -103,9 +103,14 @@ CustomizedFramesCapturer::~CustomizedFramesCapturer() {
   DeRegisterCaptureDataCallback();
   StopCapture();
   frame_generator_.reset(nullptr);
-  // Encoder is created by app. And needs to be freed by
-  // application. mark it to nullptr to avoid ReadFrame
-  // passing native buffer to stack.
+  // Call Release() before clearing the pointer. SHMPacketEncoder::Release()
+  // is gated on !released_, so if Copy() already ran (frames were encoded)
+  // this is a safe no-op. If no frame ever flowed, this is the only path
+  // that frees the bitmap slot — CustomizedVideoEncoderProxy never calls
+  // Release() on the original because external_encoder_ was never populated.
+  if (encoder_) {
+    encoder_->Release();
+  }
   encoder_ = nullptr;
 }
 
