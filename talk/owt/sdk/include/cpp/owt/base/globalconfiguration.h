@@ -146,6 +146,18 @@ class GlobalConfiguration {
   static void SetNSEnabled(bool enabled) {
     audio_processing_settings_.NSEnabled = enabled;
   }
+  /**
+  @brief Enable/disable the video-wall BWE + temporal-scalability tuning applied
+  in PeerConnectionChannel::ApplyBitrateSettings() (per-stream min-bitrate floor,
+  equal bitrate priority, temporal layers). Off by default. Public getter so the
+  channel can read it without a friend declaration.
+  */
+  static void SetVideoWallBweTuningEnabled(bool enabled) {
+    video_wall_bwe_tuning_enabled_ = enabled;
+  }
+  static bool GetVideoWallBweTuningEnabled() {
+    return video_wall_bwe_tuning_enabled_;
+  }
  private:
   GlobalConfiguration() {}
   virtual ~GlobalConfiguration() {}
@@ -240,6 +252,8 @@ class GlobalConfiguration {
    * supports both raw and encoded video frames.
    */
   static bool dual_video_encoder_;
+  // Gates the video-wall BWE/temporal tuning in ApplyBitrateSettings(). Default false.
+  static bool video_wall_bwe_tuning_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not

@@ -1176,6 +1176,12 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         track_sources.append(track_info);
         temp_pc_->AddTrack(track, {stream_id});
       }
+      // EXPERIMENT: apply the BWE floor / equal priority / temporal layers now
+      // that the published track's sender exists. The original call site
+      // (OnSetLocalSessionDescriptionSuccess) never fires in this publish flow,
+      // so ApplyBitrateSettings() must run here, right after the deferred
+      // AddTrack(), or the encoding params are never applied.
+      ApplyBitrateSettings();
       // The second signaling message of track sources to remote peer.
       Json::Value json_track_sources;
       json_track_sources[kMessageTypeKey] = kChatTrackSources;

@@ -10,6 +10,7 @@ bool GlobalConfiguration::hardware_acceleration_enabled_ = true;
 #endif
 bool GlobalConfiguration::encoded_frame_ = false;
 bool GlobalConfiguration::dual_video_encoder_ = false;
+bool GlobalConfiguration::video_wall_bwe_tuning_enabled_ = false;
 std::unique_ptr<AudioFrameGeneratorInterface>
     GlobalConfiguration::audio_frame_generator_ = nullptr;
 std::unique_ptr<VideoDecoderInterface>
