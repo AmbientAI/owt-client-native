@@ -74,6 +74,21 @@ class GlobalConfiguration {
     dual_video_encoder_ = enabled;
   }
   /**
+   @brief This function sets the optimization flags for the peer connection, which
+   helps improve the performance of video walls.
+   @param enabled Optimization flags are enabled or not.
+   */
+  static void SetBweOptimizationSettingsEnabled(bool enabled) {
+    bwe_optimization_settings_enabled_ = enabled;
+  }
+  /**
+   @brief This function gets whether the BWE optimization settings are enabled or not.
+   @return true or false.
+   */
+  static bool GetBweOptimizationSettingsEnabled() {
+    return bwe_optimization_settings_enabled_;
+  }
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -240,6 +255,10 @@ class GlobalConfiguration {
    * supports both raw and encoded video frames.
    */
   static bool dual_video_encoder_;
+  /**
+   * Default is false. If it is set to true, uses BWE optimization settings.
+   */
+  static bool bwe_optimization_settings_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not
