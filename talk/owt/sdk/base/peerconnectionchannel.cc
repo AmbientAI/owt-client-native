@@ -4,11 +4,14 @@
 #include "talk/owt/sdk/base/peerconnectionchannel.h"
 #include <vector>
 #include "talk/owt/sdk/base/sdputils.h"
+#include "owt/base/globalconfiguration.h"
 #include "webrtc/rtc_base/logging.h"
 #include "webrtc/rtc_base/thread.h"
 using namespace rtc;
 namespace owt {
 namespace base {
+static constexpr int kBweOptimizationSettingsMinBitrateBps = 500000;  // 500 kbps
+static constexpr double kVideoBitratePriority = 1.0;                  // Equal across all tiles
 PeerConnectionChannel::PeerConnectionChannel(
     PeerConnectionChannelConfiguration configuration)
     : configuration_(configuration),
@@ -54,30 +57,42 @@ void PeerConnectionChannel::ApplyBitrateSettings() {
   }
   for (auto sender : senders) {
     auto sender_track = sender->track();
-    if (sender_track != nullptr) {
-      webrtc::RtpParameters rtp_parameters = sender->GetParameters();
-      for (size_t idx = 0; idx < rtp_parameters.encodings.size(); idx++) {
-        // TODO(jianlin): It may not be appropriate to set the same settings
-        // on all encodings. Update the logic when upstream implement the
-        // the per codec settings, and many other encoding specific setttings
-        // should move here instead of modifying SDP.
-        if (sender_track->kind() ==
-            webrtc::MediaStreamTrackInterface::kAudioKind) {
-          if (configuration_.audio.size() > 0 &&
-              configuration_.audio[0].max_bitrate > 0) {
-            rtp_parameters.encodings[idx].max_bitrate_bps =
-                absl::optional<int>(configuration_.audio[0].max_bitrate * 1024);
-            sender->SetParameters(rtp_parameters);
-          }
-        } else if (sender_track->kind() ==
-                   webrtc::MediaStreamTrackInterface::kVideoKind) {
-          if (configuration_.video.size() > 0 &&
-              configuration_.video[0].max_bitrate > 0) {
-            rtp_parameters.encodings[idx].max_bitrate_bps =
-                absl::optional<int>(configuration_.video[0].max_bitrate * 1024);
-            sender->SetParameters(rtp_parameters);
-          }
+    if (sender_track == nullptr) {
+      continue;
+    }
+    webrtc::RtpParameters rtp_parameters = sender->GetParameters();
+    bool is_audio = sender_track->kind() == webrtc::MediaStreamTrackInterface::kAudioKind;
+    bool is_video = sender_track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind;
+    for (size_t idx = 0; idx < rtp_parameters.encodings.size(); idx++) {  
+      // TODO(jianlin): It may not be appropriate to set the same settings
+      // on all encodings. Update the logic when upstream implement the
+      // the per codec settings, and many other encoding specific setttings
+      // should move here instead of modifying SDP.
+      bool is_modified = false;
+      if (is_audio) {
+        if (configuration_.audio.size() > 0 &&
+            configuration_.audio[0].max_bitrate > 0) {
+          rtp_parameters.encodings[idx].max_bitrate_bps =
+              absl::optional<int>(configuration_.audio[0].max_bitrate * 1024);
+          is_modified = true;
         }
+      } else if (is_video) {
+        if (configuration_.video.size() > 0 &&
+            configuration_.video[0].max_bitrate > 0) {
+          rtp_parameters.encodings[idx].max_bitrate_bps =
+              absl::optional<int>(configuration_.video[0].max_bitrate * 1024);
+          is_modified = true;
+        }
+        // Gated by node config flag, if enabled, set the min bitrate and priority.
+        if (GlobalConfiguration::GetBweOptimizationSettingsEnabled()) {
+          rtp_parameters.encodings[idx].min_bitrate_bps =
+              absl::optional<int>(kBweOptimizationSettingsMinBitrateBps);
+          rtp_parameters.encodings[idx].bitrate_priority = kVideoBitratePriority;
+          is_modified = true;
+        }
+      }
+      if (is_modified) {
+        sender->SetParameters(rtp_parameters);
       }
     }
   }
