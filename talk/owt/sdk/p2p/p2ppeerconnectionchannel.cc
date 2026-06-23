@@ -788,6 +788,29 @@ void P2PPeerConnectionChannel::OnIceCandidate(
   json[kMessageDataKey] = signal;
   SendSignalingMessage(json);
 }
+// AMBIENT: Fires when ICE nominates a candidate pair, and again whenever the
+// selected pair changes mid-call (e.g. srflx -> relay failover). This is the
+// only place that reports the path media is ACTUALLY using; GetConnectionStats
+// gives a snapshot, this gives the transitions. remote_id_ is the peerid.
+// Candidate::type() uses WebRTC internal names: local(host)/stun(srflx)/relay/prflx.
+// LS_ERROR (not LS_INFO): the appliance sets owt log severity to kError, so
+// INFO/WARNING are filtered out. Log at ERROR so this always emits.
+void P2PPeerConnectionChannel::OnIceSelectedCandidatePairChanged(
+    const cricket::CandidatePairChangeEvent& event) {
+  const cricket::Candidate& local = event.selected_candidate_pair.local;
+  const cricket::Candidate& remote = event.selected_candidate_pair.remote;
+  RTC_LOG(LS_ERROR) << "[ICE] selected_pair_changed"
+                    << " peerid=" << remote_id_
+                    << " local_type=" << local.type()
+                    << " remote_type=" << remote.type()
+                    << " local_protocol=" << local.protocol()
+                    << " remote_relay_protocol=" << remote.relay_protocol()
+                    << " is_relay="
+                    << ((local.type() == "relay" || remote.type() == "relay")
+                            ? "true"
+                            : "false")
+                    << " reason=" << event.reason;
+}
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
     webrtc::SessionDescriptionInterface* desc) {
   RTC_LOG(LS_INFO) << "Create sdp success.";

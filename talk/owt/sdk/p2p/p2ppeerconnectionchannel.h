@@ -123,6 +123,10 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   virtual void OnIceGatheringChange(
       PeerConnectionInterface::IceGatheringState new_state) override;
   virtual void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override;
+  // AMBIENT: log the selected ICE candidate pair (host/srflx/relay) and every
+  // mid-call change, so we can see which path media actually used per peer.
+  virtual void OnIceSelectedCandidatePairChanged(
+      const cricket::CandidatePairChangeEvent& event) override;
   virtual void OnRenegotiationNeeded() override;
   // DataChannelObserver
   virtual void OnDataChannelStateChange() override;
