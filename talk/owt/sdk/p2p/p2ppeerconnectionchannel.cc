@@ -451,7 +451,9 @@ void P2PPeerConnectionChannel::OnMessageUserAgent(Json::Value& ua) {
   }
 }
 void P2PPeerConnectionChannel::OnMessageStop() {
-  RTC_LOG(LS_INFO) << "Remote user stopped.";
+  // [conn-diag] The REMOTE peer (browser) initiated the close via chat-closed.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                    << " teardown cause: REMOTE sent chat-closed (browser/client closed the session)";
   ClosePeerConnection();
   ChangeSessionState(kSessionStateReady);
 }
@@ -707,7 +709,11 @@ void P2PPeerConnectionChannel::OnRenegotiationNeeded() {
 
 void P2PPeerConnectionChannel::OnIceConnectionChange(
     PeerConnectionInterface::IceConnectionState new_state) {
-  RTC_LOG(LS_INFO) << "Ice connection state changed: " << new_state;
+  // [conn-diag] Logged at LS_ERROR so it passes the kError severity filter set
+  // in main.cc and lands in webrtc_server.log. IceConnectionState enum:
+  // 0=new 1=checking 2=connected 3=completed 4=failed 5=disconnected 6=closed.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                    << " ICE connection state -> " << new_state;
   switch (new_state) {
     case webrtc::PeerConnectionInterface::kIceConnectionConnected:
     case webrtc::PeerConnectionInterface::kIceConnectionCompleted:
@@ -721,6 +727,11 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
       DrainPendingStreams();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionDisconnected:
+      // [conn-diag] Media path went DISCONNECTED (transient connectivity loss).
+      // The reconnect-timeout logic below is commented out, so the channel
+      // just waits here — it neither tears down nor actively recovers.
+      RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                        << " ICE DISCONNECTED (transient connectivity loss; no active reconnect handling)";
       // {
       //   std::lock_guard<std::mutex> lock(last_disconnect_mutex_);
       //   last_disconnect_ = std::chrono::system_clock::now();
@@ -748,9 +759,14 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
  //      }).detach();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionClosed:
+      RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                        << " ICE CLOSED (peer connection closed)";
       CleanLastPeerConnection();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionFailed:
+      RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                        << " ICE FAILED — ending " << remote_streams_.size()
+                        << " stream(s); connectivity checks exhausted (network/TURN)";
       for (std::unordered_map<std::string,
                               std::shared_ptr<RemoteStream>>::iterator it =
                remote_streams_.begin();
@@ -969,7 +985,11 @@ void P2PPeerConnectionChannel::Unpublish(
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  RTC_LOG(LS_INFO) << "Stop session.";
+  // [conn-diag] LOCAL (server) initiated the close — e.g. killClient from a
+  // heartbeat-timeout / stale-PC sweep, or a hangup-driven teardown.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                    << " teardown cause: LOCAL Stop() called (server-initiated; session_state="
+                    << session_state_ << ")";
   switch (session_state_) {
     case kSessionStateConnecting:
     case kSessionStateConnected:
@@ -1256,7 +1276,10 @@ void P2PPeerConnectionChannel::SendStop(
 }
 // Only function that holds locks while calling WebRTC methods. Any deadlock is here.
 void P2PPeerConnectionChannel::ClosePeerConnection() {
-  RTC_LOG(LS_INFO) << "Close peer connection.";
+  // [conn-diag] Final teardown of the underlying PeerConnection for this peer.
+  // The cause was logged by whoever called us (ICE failed/closed, OnMessageStop,
+  // or Stop); this marks the actual close.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_ << " closing peer connection";
   // Reference to peer connection  that outlives the scope of the locks.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
   rtc::scoped_refptr<webrtc::DataChannelInterface> temp_dc_;
