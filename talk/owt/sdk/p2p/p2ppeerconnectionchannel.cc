@@ -167,7 +167,9 @@ void P2PPeerConnectionChannel::Publish(
     std::shared_ptr<LocalStream> stream,
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  RTC_LOG(LS_INFO) << "Publishing a local stream.";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " Publish() called stream_id=" << stream->MediaStream()->id()
+                   << " session_state=" << session_state_;
   // Add reference to peer connection until end of function.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
@@ -250,7 +252,9 @@ void P2PPeerConnectionChannel::Publish(
     std::lock_guard<std::mutex> lock(published_streams_mutex_);
     publishing_streams_.insert(stream_label);
   }
-  RTC_LOG(LS_INFO) << "Session state: " << session_state_;
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " stream queued for publish; session_state=" << session_state_
+                   << " pending_streams=" << pending_publish_streams_.size();
   if (on_success) {
     on_success();
   }
@@ -336,7 +340,7 @@ void P2PPeerConnectionChannel::CreateOffer() {
     }
   }
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
-  RTC_LOG(LS_INFO) << "Create offer.";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_ << " CreateOffer";
   negotiation_needed_ = false;
   scoped_refptr<FunctionalCreateSessionDescriptionObserver> observer =
       FunctionalCreateSessionDescriptionObserver::Create(
@@ -352,7 +356,7 @@ void P2PPeerConnectionChannel::CreateOffer() {
   }
 }
 void P2PPeerConnectionChannel::CreateAnswer() {
-  RTC_LOG(LS_INFO) << "Create answer.";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_ << " CreateAnswer";
   // Get reference so peer_connection_ is not deleted before calling CreateAnswer
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   scoped_refptr<FunctionalCreateSessionDescriptionObserver> observer =
@@ -388,7 +392,8 @@ void P2PPeerConnectionChannel::SendSignalingMessage(
 }
 void P2PPeerConnectionChannel::OnIncomingSignalingMessage(
     const std::string& message) {
-  RTC_LOG(LS_INFO) << "OnIncomingMessage: " << message;
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " OnIncomingMessage: " << message;
   RTC_DCHECK(!message.empty());
   Json::Reader reader;
   Json::Value json_message;
@@ -439,6 +444,8 @@ void P2PPeerConnectionChannel::OnIncomingSignalingMessage(
   }
 }
 void P2PPeerConnectionChannel::OnMessageUserAgent(Json::Value& ua) {
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " UA received; session_state=" << session_state_;
   HandleRemoteCapability(ua);
   switch (session_state_) {
     case kSessionStateReady:
@@ -451,16 +458,19 @@ void P2PPeerConnectionChannel::OnMessageUserAgent(Json::Value& ua) {
   }
 }
 void P2PPeerConnectionChannel::OnMessageStop() {
-  RTC_LOG(LS_INFO) << "Remote user stopped.";
+  // [conn-diag] The REMOTE peer (browser) initiated the close via chat-closed.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                    << " teardown cause: REMOTE sent chat-closed (browser/client closed the session)";
   ClosePeerConnection();
   ChangeSessionState(kSessionStateReady);
 }
 void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
-  RTC_LOG(LS_INFO) << "OnMessageSignal";
   string type;
   string desc;
   rtc::GetStringFromJsonObject(message, kSessionDescriptionTypeKey, &type);
-  RTC_LOG(LS_INFO) << "Received message type: " << type;
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " OnMessageSignal type=" << type
+                   << " session_state=" << session_state_;
   // Store reference so peer_connection_ is not deleted until function ends
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
@@ -512,11 +522,13 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
           webrtc::CreateSessionDescription(desc->type(), sdp_string, nullptr));
       // Synchronous call. After done, will invoke OnSetRemoteDescription. If
       // remote sent an offer, we create answer for it.
-      RTC_LOG(LS_WARNING) << "SetRemoteSdp:" << sdp_string;
+      RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                       << " SetRemoteDescription type=" << type;
       temp_pc_->SetRemoteDescription(std::move(new_desc), observer);
       pending_remote_sdp_.reset();
     }
   } else if (type == "candidates") {
+    RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_ << " ICE candidate received";
     string sdp_mid;
     string candidate;
     int sdp_mline_index;
@@ -541,6 +553,8 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
 }
 void P2PPeerConnectionChannel::OnMessageTracksAdded(
     Json::Value& stream_tracks) {
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " chat-tracks-added ack received; track_count=" << stream_tracks.size();
   // Find the streams with track information, and add them to published stream
   // list.
   for (Json::Value::ArrayIndex idx = 0; idx != stream_tracks.size(); idx++) {
@@ -581,7 +595,12 @@ void P2PPeerConnectionChannel::OnMessageStreamInfo(Json::Value& stream_info) {
 }
 void P2PPeerConnectionChannel::OnSignalingChange(
     PeerConnectionInterface::SignalingState new_state) {
-  RTC_LOG(LS_INFO) << "Signaling state changed: " << new_state;
+  static const char* kSigStateNames[] = {
+    "kStable","kHaveLocalOffer","kHaveLocalPrAnswer","kHaveRemoteOffer","kHaveRemotePrAnswer","kClosed"
+  };
+  const char* state_name = (new_state >= 0 && new_state <= 5) ? kSigStateNames[new_state] : "unknown";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " SignalingState -> " << state_name << " (" << new_state << ")";
 
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
@@ -692,7 +711,10 @@ void P2PPeerConnectionChannel::OnDataChannel(
   data_channel_->RegisterObserver(this);
 }
 void P2PPeerConnectionChannel::OnNegotiationNeeded() {
-  RTC_LOG(LS_INFO) << "On negotiation needed.";
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_neg_ = GetPeerConnectionRef();
+  int sig_state = temp_pc_neg_ ? static_cast<int>(temp_pc_neg_->signaling_state()) : -1;
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " OnNegotiationNeeded signaling_state=" << sig_state;
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (temp_pc_ && temp_pc_->signaling_state() == PeerConnectionInterface::SignalingState::kStable) {
     CreateOffer();
@@ -707,7 +729,11 @@ void P2PPeerConnectionChannel::OnRenegotiationNeeded() {
 
 void P2PPeerConnectionChannel::OnIceConnectionChange(
     PeerConnectionInterface::IceConnectionState new_state) {
-  RTC_LOG(LS_INFO) << "Ice connection state changed: " << new_state;
+  // [conn-diag] Logged at LS_ERROR so it passes the kError severity filter set
+  // in main.cc and lands in webrtc_server.log. IceConnectionState enum:
+  // 0=new 1=checking 2=connected 3=completed 4=failed 5=disconnected 6=closed.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                    << " ICE connection state -> " << new_state;
   switch (new_state) {
     case webrtc::PeerConnectionInterface::kIceConnectionConnected:
     case webrtc::PeerConnectionInterface::kIceConnectionCompleted:
@@ -721,6 +747,11 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
       DrainPendingStreams();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionDisconnected:
+      // [conn-diag] Media path went DISCONNECTED (transient connectivity loss).
+      // The reconnect-timeout logic below is commented out, so the channel
+      // just waits here — it neither tears down nor actively recovers.
+      RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                        << " ICE DISCONNECTED (transient connectivity loss; no active reconnect handling)";
       // {
       //   std::lock_guard<std::mutex> lock(last_disconnect_mutex_);
       //   last_disconnect_ = std::chrono::system_clock::now();
@@ -748,9 +779,14 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
  //      }).detach();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionClosed:
+      RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                        << " ICE CLOSED (peer connection closed)";
       CleanLastPeerConnection();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionFailed:
+      RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                        << " ICE FAILED — ending " << remote_streams_.size()
+                        << " stream(s); connectivity checks exhausted (network/TURN)";
       for (std::unordered_map<std::string,
                               std::shared_ptr<RemoteStream>>::iterator it =
                remote_streams_.begin();
@@ -768,11 +804,16 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
 }
 void P2PPeerConnectionChannel::OnIceGatheringChange(
     PeerConnectionInterface::IceGatheringState new_state) {
-  RTC_LOG(LS_INFO) << "Ice gathering state changed: " << new_state;
+  static const char* kGatherStateNames[] = {"kIceGatheringNew","kIceGatheringGathering","kIceGatheringComplete"};
+  const char* gs_name = (new_state >= 0 && new_state <= 2) ? kGatherStateNames[new_state] : "unknown";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " IceGatheringState -> " << gs_name << " (" << new_state << ")";
 }
 void P2PPeerConnectionChannel::OnIceCandidate(
     const webrtc::IceCandidateInterface* candidate) {
-  RTC_LOG(LS_INFO) << "On ice candidate";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " local ICE candidate generated sdp_mid=" << candidate->sdp_mid()
+                   << " type=" << candidate->candidate().type();
   Json::Value signal;
   signal[kSessionDescriptionTypeKey] = "candidates";
   signal[kIceCandidateSdpMLineIndexKey] = candidate->sdp_mline_index();
@@ -813,7 +854,8 @@ void P2PPeerConnectionChannel::OnIceSelectedCandidatePairChanged(
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
     webrtc::SessionDescriptionInterface* desc) {
-  RTC_LOG(LS_INFO) << "Create sdp success.";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " SDP created type=" << desc->type();
   {
     std::lock_guard<std::mutex> lock(ended_mutex_);
     if (ended_) { return; }
@@ -834,7 +876,7 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
   Stop(nullptr, nullptr);
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
-  RTC_LOG(LS_INFO) << "Set local sdp success.";
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_ << " SetLocalDescription success — sending SDP to remote";
   {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     is_creating_offer_ = false;
@@ -869,6 +911,8 @@ void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess() {
     std::lock_guard<std::mutex> lock(ended_mutex_);
     if (ended_) { return; }
   }
+  RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                   << " SetRemoteDescription success; session_state=" << session_state_;
   PeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess();
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
@@ -969,7 +1013,11 @@ void P2PPeerConnectionChannel::Unpublish(
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  RTC_LOG(LS_INFO) << "Stop session.";
+  // [conn-diag] LOCAL (server) initiated the close — e.g. killClient from a
+  // heartbeat-timeout / stale-PC sweep, or a hangup-driven teardown.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_
+                    << " teardown cause: LOCAL Stop() called (server-initiated; session_state="
+                    << session_state_ << ")";
   switch (session_state_) {
     case kSessionStateConnecting:
     case kSessionStateConnected:
@@ -1256,7 +1304,10 @@ void P2PPeerConnectionChannel::SendStop(
 }
 // Only function that holds locks while calling WebRTC methods. Any deadlock is here.
 void P2PPeerConnectionChannel::ClosePeerConnection() {
-  RTC_LOG(LS_INFO) << "Close peer connection.";
+  // [conn-diag] Final teardown of the underlying PeerConnection for this peer.
+  // The cause was logged by whoever called us (ICE failed/closed, OnMessageStop,
+  // or Stop); this marks the actual close.
+  RTC_LOG(LS_ERROR) << "[conn-diag] peer=" << remote_id_ << " closing peer connection";
   // Reference to peer connection  that outlives the scope of the locks.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
   rtc::scoped_refptr<webrtc::DataChannelInterface> temp_dc_;
@@ -1298,9 +1349,12 @@ void P2PPeerConnectionChannel::CheckWaitedList() {
 }
 
 void P2PPeerConnectionChannel::OnDataChannelStateChange() {
-  if (data_channel_ && data_channel_->state() ==
-      webrtc::DataChannelInterface::DataState::kOpen) {
-    DrainPendingMessages();
+  if (data_channel_) {
+    RTC_LOG(LS_INFO) << "[lifecycle] peer=" << remote_id_
+                     << " DataChannel state=" << data_channel_->state();
+    if (data_channel_->state() == webrtc::DataChannelInterface::DataState::kOpen) {
+      DrainPendingMessages();
+    }
   }
 }
 void P2PPeerConnectionChannel::OnDataChannelMessage(
