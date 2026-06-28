@@ -490,7 +490,7 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
     std::unique_ptr<webrtc::SessionDescriptionInterface> desc(
         webrtc::CreateSessionDescription(type, sdp, nullptr));
     if (!desc) {
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG] Failed to create session description. peerid=" << remote_id_
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Failed to create session description. peerid=" << remote_id_
                         << " msg_type=" << type;
       return;
     }
@@ -505,7 +505,7 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
               std::placeholders::_1));
       std::string sdp_string;
       if (!desc->ToString(&sdp_string)) {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG] Error parsing local description. peerid=" << remote_id_
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Error parsing local description. peerid=" << remote_id_
                           << " msg_type=" << type;
         RTC_DCHECK(false);
       }
@@ -620,7 +620,7 @@ void P2PPeerConnectionChannel::OnSignalingChange(
                 std::placeholders::_1));
         std::string sdp_string;
         if (!pending_remote_sdp_->ToString(&sdp_string)) {
-          RTC_LOG(LS_ERROR) << "[CONN-DIAG] Error parsing local description. peerid=" << remote_id_
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Error parsing local description. peerid=" << remote_id_
                             << " msg_type=queued_offer";
           RTC_DCHECK(false);
         }
@@ -781,7 +781,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
       CleanLastPeerConnection();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionFailed:
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] failed peerid=" << remote_id_
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE][WARN] failed peerid=" << remote_id_
                         << " remote_streams_count=" << remote_streams_.size();
       for (std::unordered_map<std::string,
                               std::shared_ptr<RemoteStream>>::iterator it =
@@ -816,7 +816,7 @@ void P2PPeerConnectionChannel::OnIceCandidate(
   signal[kIceCandidateSdpMidKey] = candidate->sdp_mid();
   string sdp;
   if (!candidate->ToString(&sdp)) {
-    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] Failed to serialize candidate. peerid=" << remote_id_;
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE][ERROR] Failed to serialize candidate. peerid=" << remote_id_;
     return;
   }
   signal[kIceCandidateSdpNameKey] = sdp;
@@ -867,7 +867,7 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
     const std::string& error) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] Create sdp failed. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Create sdp failed. peerid=" << remote_id_
                    << " err=" << error;
   Stop(nullptr, nullptr);
 }
@@ -899,7 +899,7 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure(
     const std::string& error) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] Set local sdp failed. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Set local sdp failed. peerid=" << remote_id_
                    << " err=" << error;
   Stop(nullptr, nullptr);
 }
@@ -914,7 +914,7 @@ void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess() {
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
     const std::string& error) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] Set remote sdp failed. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Set remote sdp failed. peerid=" << remote_id_
                    << " err=" << error;
   std::cout << "Set remote_sdp FAILED" << std::endl << std::endl;
   Stop(nullptr, nullptr);
