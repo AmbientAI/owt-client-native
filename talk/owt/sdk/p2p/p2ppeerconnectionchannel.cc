@@ -167,7 +167,7 @@ void P2PPeerConnectionChannel::Publish(
     std::shared_ptr<LocalStream> stream,
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] Publishing a local stream. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=Publishing a local stream. peerid=" << remote_id_
                    << " session_state=" << session_state_;
   // Add reference to peer connection until end of function.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
@@ -251,7 +251,7 @@ void P2PPeerConnectionChannel::Publish(
     std::lock_guard<std::mutex> lock(published_streams_mutex_);
     publishing_streams_.insert(stream_label);
   }
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] stream_queued_for_publish peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=stream_queued_for_publish peerid=" << remote_id_
                    << " session_state=" << session_state_
                    << " pending_streams=" << pending_publish_streams_.size();
   if (on_success) {
@@ -339,7 +339,7 @@ void P2PPeerConnectionChannel::CreateOffer() {
     }
   }
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] create_offer peerid=" << remote_id_;
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=create_offer peerid=" << remote_id_;
   negotiation_needed_ = false;
   scoped_refptr<FunctionalCreateSessionDescriptionObserver> observer =
       FunctionalCreateSessionDescriptionObserver::Create(
@@ -355,7 +355,7 @@ void P2PPeerConnectionChannel::CreateOffer() {
   }
 }
 void P2PPeerConnectionChannel::CreateAnswer() {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] create_answer peerid=" << remote_id_;
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=create_answer peerid=" << remote_id_;
   // Get reference so peer_connection_ is not deleted before calling CreateAnswer
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   scoped_refptr<FunctionalCreateSessionDescriptionObserver> observer =
@@ -405,7 +405,7 @@ void P2PPeerConnectionChannel::OnIncomingSignalingMessage(
     RTC_LOG(LS_WARNING) << "Cannot get type from incoming message.";
     return;
   }
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] incoming_message peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=incoming_message peerid=" << remote_id_
                     << " msg_type=" << message_type;
   if (message_type == kChatUserAgent) {
     // Send back user agent info once and only once
@@ -444,7 +444,7 @@ void P2PPeerConnectionChannel::OnIncomingSignalingMessage(
   }
 }
 void P2PPeerConnectionChannel::OnMessageUserAgent(Json::Value& ua) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] ua_received peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=ua_received peerid=" << remote_id_
                    << " session_state=" << session_state_;
   HandleRemoteCapability(ua);
   switch (session_state_) {
@@ -458,7 +458,7 @@ void P2PPeerConnectionChannel::OnMessageUserAgent(Json::Value& ua) {
   }
 }
 void P2PPeerConnectionChannel::OnMessageStop() {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] Remote user stopped. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=Remote user stopped. peerid=" << remote_id_
                    << " session_state=" << session_state_;
   ClosePeerConnection();
   ChangeSessionState(kSessionStateReady);
@@ -467,7 +467,7 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
   string type;
   string desc;
   rtc::GetStringFromJsonObject(message, kSessionDescriptionTypeKey, &type);
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] signal_received peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=signal_received peerid=" << remote_id_
                    << " msg_type=" << type
                    << " session_state=" << session_state_;
   // Store reference so peer_connection_ is not deleted until function ends
@@ -490,12 +490,12 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
     std::unique_ptr<webrtc::SessionDescriptionInterface> desc(
         webrtc::CreateSessionDescription(type, sdp, nullptr));
     if (!desc) {
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Failed to create session description. peerid=" << remote_id_
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Failed to create session description. peerid=" << remote_id_
                         << " msg_type=" << type;
       return;
     }
     if (type == "offer" && temp_pc_ && temp_pc_->signaling_state() != webrtc::PeerConnectionInterface::kStable) {
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG] sdp_offer_queued peerid=" << remote_id_
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sdp_offer_queued peerid=" << remote_id_
                         << " signaling_state=" << static_cast<int>(temp_pc_->signaling_state());
       pending_remote_sdp_ = std::move(desc);
     } else {
@@ -505,7 +505,7 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
               std::placeholders::_1));
       std::string sdp_string;
       if (!desc->ToString(&sdp_string)) {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Error parsing local description. peerid=" << remote_id_
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Error parsing local description. peerid=" << remote_id_
                           << " msg_type=" << type;
         RTC_DCHECK(false);
       }
@@ -523,13 +523,13 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
           webrtc::CreateSessionDescription(desc->type(), sdp_string, nullptr));
       // Synchronous call. After done, will invoke OnSetRemoteDescription. If
       // remote sent an offer, we create answer for it.
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG] set_remote_description peerid=" << remote_id_
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_remote_description peerid=" << remote_id_
                        << " msg_type=" << type;
       temp_pc_->SetRemoteDescription(std::move(new_desc), observer);
       pending_remote_sdp_.reset();
     }
   } else if (type == "candidates") {
-    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] remote_candidate_received peerid=" << remote_id_;
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=remote_candidate_received peerid=" << remote_id_;
     string sdp_mid;
     string candidate;
     int sdp_mline_index;
@@ -554,7 +554,7 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
 }
 void P2PPeerConnectionChannel::OnMessageTracksAdded(
     Json::Value& stream_tracks) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] tracks_added_ack peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=tracks_added_ack peerid=" << remote_id_
                    << " track_count=" << stream_tracks.size();
   // Find the streams with track information, and add them to published stream
   // list.
@@ -600,7 +600,7 @@ void P2PPeerConnectionChannel::OnSignalingChange(
     "kStable","kHaveLocalOffer","kHaveLocalPrAnswer","kHaveRemoteOffer","kHaveRemotePrAnswer","kClosed"
   };
   const char* state_name = (new_state >= 0 && new_state <= 5) ? kSigStateNames[new_state] : "unknown";
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] signaling_state peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=signaling_state peerid=" << remote_id_
                    << " state=" << state_name << " (" << new_state << ")";
 
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
@@ -613,14 +613,14 @@ void P2PPeerConnectionChannel::OnSignalingChange(
   switch (new_state) {
     case PeerConnectionInterface::SignalingState::kStable:
       if (pending_remote_sdp_) {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG] retrying_queued_sdp peerid=" << remote_id_;
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=retrying_queued_sdp peerid=" << remote_id_;
         scoped_refptr<FunctionalSetRemoteDescriptionObserver> observer =
             FunctionalSetRemoteDescriptionObserver::Create(std::bind(
                 &P2PPeerConnectionChannel::OnSetRemoteDescriptionComplete, this,
                 std::placeholders::_1));
         std::string sdp_string;
         if (!pending_remote_sdp_->ToString(&sdp_string)) {
-          RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Error parsing local description. peerid=" << remote_id_
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Error parsing local description. peerid=" << remote_id_
                             << " msg_type=queued_offer";
           RTC_DCHECK(false);
         }
@@ -715,7 +715,7 @@ void P2PPeerConnectionChannel::OnDataChannel(
 void P2PPeerConnectionChannel::OnNegotiationNeeded() {
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_neg_ = GetPeerConnectionRef();
   int sig_state = temp_pc_neg_ ? static_cast<int>(temp_pc_neg_->signaling_state()) : -1;
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] negotiation_needed peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=negotiation_needed peerid=" << remote_id_
                    << " signaling_state=" << sig_state;
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (temp_pc_ && temp_pc_->signaling_state() == PeerConnectionInterface::SignalingState::kStable) {
@@ -725,7 +725,7 @@ void P2PPeerConnectionChannel::OnNegotiationNeeded() {
   }
 }
 void P2PPeerConnectionChannel::OnRenegotiationNeeded() {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] renegotiation_needed peerid=" << remote_id_;
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=renegotiation_needed peerid=" << remote_id_;
   CreateOffer();
 }
 
@@ -735,7 +735,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
     "New","Checking","Connected","Completed","Failed","Disconnected","Closed","Max"
   };
   const char* ice_conn_name = (new_state >= 0 && new_state <= 7) ? kIceConnStateNames[new_state] : "unknown";
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] IceConnectionState peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=IceConnectionState peerid=" << remote_id_
                    << " state=" << ice_conn_name << " (" << new_state << ")";
   switch (new_state) {
     case webrtc::PeerConnectionInterface::kIceConnectionConnected:
@@ -750,7 +750,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
       DrainPendingStreams();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionDisconnected:
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] disconnected peerid=" << remote_id_;
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=disconnected peerid=" << remote_id_;
       // {
       //   std::lock_guard<std::mutex> lock(last_disconnect_mutex_);
       //   last_disconnect_ = std::chrono::system_clock::now();
@@ -781,7 +781,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
       CleanLastPeerConnection();
       break;
     case webrtc::PeerConnectionInterface::kIceConnectionFailed:
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE][WARN] failed peerid=" << remote_id_
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE][WARN] event=ice_failed peerid=" << remote_id_
                         << " remote_streams_count=" << remote_streams_.size();
       for (std::unordered_map<std::string,
                               std::shared_ptr<RemoteStream>>::iterator it =
@@ -802,12 +802,12 @@ void P2PPeerConnectionChannel::OnIceGatheringChange(
     PeerConnectionInterface::IceGatheringState new_state) {
   static const char* kGatherStateNames[] = {"kIceGatheringNew","kIceGatheringGathering","kIceGatheringComplete"};
   const char* gs_name = (new_state >= 0 && new_state <= 2) ? kGatherStateNames[new_state] : "unknown";
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] gathering_state peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=gathering_state peerid=" << remote_id_
                    << " state=" << gs_name << " (" << new_state << ")";
 }
 void P2PPeerConnectionChannel::OnIceCandidate(
     const webrtc::IceCandidateInterface* candidate) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] local_candidate peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=local_candidate peerid=" << remote_id_
                    << " sdp_mid=" << candidate->sdp_mid()
                    << " type=" << candidate->candidate().type();
   Json::Value signal;
@@ -816,7 +816,7 @@ void P2PPeerConnectionChannel::OnIceCandidate(
   signal[kIceCandidateSdpMidKey] = candidate->sdp_mid();
   string sdp;
   if (!candidate->ToString(&sdp)) {
-    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE][ERROR] Failed to serialize candidate. peerid=" << remote_id_;
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE][ERROR] event=Failed to serialize candidate. peerid=" << remote_id_;
     return;
   }
   signal[kIceCandidateSdpNameKey] = sdp;
@@ -836,7 +836,7 @@ void P2PPeerConnectionChannel::OnIceSelectedCandidatePairChanged(
     const cricket::CandidatePairChangeEvent& event) {
   const cricket::Candidate& local = event.selected_candidate_pair.local;
   const cricket::Candidate& remote = event.selected_candidate_pair.remote;
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] selected_pair_changed peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=selected_pair_changed peerid=" << remote_id_
                     << " local=" << local.type() << "://" << local.address().ToString()
                     << " remote=" << remote.type() << "://" << remote.address().ToString()
                     << " local_protocol=" << local.protocol()
@@ -849,7 +849,7 @@ void P2PPeerConnectionChannel::OnIceSelectedCandidatePairChanged(
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
     webrtc::SessionDescriptionInterface* desc) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] sdp_created peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sdp_created peerid=" << remote_id_
                    << " type=" << desc->type();
   {
     std::lock_guard<std::mutex> lock(ended_mutex_);
@@ -867,12 +867,12 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
     const std::string& error) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Create sdp failed. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Create sdp failed. peerid=" << remote_id_
                    << " err=" << error;
   Stop(nullptr, nullptr);
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] set_local_sdp_success peerid=" << remote_id_;
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_local_sdp_success peerid=" << remote_id_;
   {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     is_creating_offer_ = false;
@@ -899,7 +899,7 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure(
     const std::string& error) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Set local sdp failed. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Set local sdp failed. peerid=" << remote_id_
                    << " err=" << error;
   Stop(nullptr, nullptr);
 }
@@ -908,13 +908,13 @@ void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess() {
     std::lock_guard<std::mutex> lock(ended_mutex_);
     if (ended_) { return; }
   }
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] set_remote_sdp_success peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_remote_sdp_success peerid=" << remote_id_
                    << " session_state=" << session_state_;
   PeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess();
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
     const std::string& error) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] Set remote sdp failed. peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Set remote sdp failed. peerid=" << remote_id_
                    << " err=" << error;
   std::cout << "Set remote_sdp FAILED" << std::endl << std::endl;
   Stop(nullptr, nullptr);
@@ -993,9 +993,9 @@ void P2PPeerConnectionChannel::Unpublish(
       //   on_failure(std::move(e));
       // }
       // return;
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG] Did not find published stream. peerid=" << remote_id_;
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=Did not find published stream. peerid=" << remote_id_;
     } else {
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG] Found published stream. peerid=" << remote_id_;
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=Found published stream. peerid=" << remote_id_;
       published_streams_.erase(it);
     }
   }
@@ -1011,7 +1011,7 @@ void P2PPeerConnectionChannel::Unpublish(
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] Stop called peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=stop_called peerid=" << remote_id_
                    << " session_state=" << session_state_;
   switch (session_state_) {
     case kSessionStateConnecting:
@@ -1152,7 +1152,7 @@ bool P2PPeerConnectionChannel::IsStale() {
                ((ice_state == webrtc::PeerConnectionInterface::kIceConnectionNew)
                 || ((ice_state == webrtc::PeerConnectionInterface::kIceConnectionFailed) &&
                    (signaling_state == webrtc::PeerConnectionInterface::kHaveLocalOffer)));
-    RTC_LOG(LS_ERROR) << "[CONN-DIAG] IsStale peerid=" << remote_id_
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=is_stale peerid=" << remote_id_
                       << " age_secs=" << age
                       << " ice_state=" << ice_state
                       << " signaling_state=" << signaling_state
@@ -1200,7 +1200,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       bool is_to_be_unpublished = false;
       for (auto& un_stream : unpublish_snapshot) {
         if (stream == un_stream) { // comparison of pointers;
-          RTC_LOG(LS_ERROR) << "[CONN-DIAG] Trying to Publish and Unpublish stream. peerid=" << remote_id_;
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=Trying to Publish and Unpublish stream. peerid=" << remote_id_;
           is_to_be_unpublished = true;
           break;
         }
@@ -1298,7 +1298,7 @@ void P2PPeerConnectionChannel::SendStop(
 }
 // Only function that holds locks while calling WebRTC methods. Any deadlock is here.
 void P2PPeerConnectionChannel::ClosePeerConnection() {
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] ClosePeerConnection peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=close_peer_connection peerid=" << remote_id_
                    << " already_ended=" << ended_;
   // Reference to peer connection  that outlives the scope of the locks.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;
@@ -1342,7 +1342,7 @@ void P2PPeerConnectionChannel::CheckWaitedList() {
 
 void P2PPeerConnectionChannel::OnDataChannelStateChange() {
   if (data_channel_) {
-    RTC_LOG(LS_ERROR) << "[CONN-DIAG] datachannel_state peerid=" << remote_id_
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=datachannel_state peerid=" << remote_id_
                      << " state=" << data_channel_->state();
     if (data_channel_->state() == webrtc::DataChannelInterface::DataState::kOpen) {
       DrainPendingMessages();
@@ -1431,7 +1431,7 @@ void P2PPeerConnectionChannel::DrainPendingRemoteCandidates() {
   // and pending remote candidates have already been cleared.
   if (temp_pc_ && temp_pc_->remote_description()) {
     rtc::CritScope cs(&pending_remote_candidates_crit_);
-    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] drain_pending_candidates peerid=" << remote_id_
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=drain_pending_candidates peerid=" << remote_id_
                       << " count=" << pending_remote_candidates_.size();
     for (const auto& ice_candidate : pending_remote_candidates_) {
       if (!temp_pc_->AddIceCandidate(ice_candidate.get())) {
