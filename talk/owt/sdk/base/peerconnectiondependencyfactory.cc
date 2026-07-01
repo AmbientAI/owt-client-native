@@ -20,6 +20,11 @@
 #include "webrtc/rtc_base/bind.h"
 #include "webrtc/rtc_base/ssl_adapter.h"
 #include "webrtc/rtc_base/thread.h"
+#include "webrtc/rtc_base/logging.h"
+#include <pthread.h>
+#include <sched.h>
+#include <cstring>
+#include <cerrno>
 #include "webrtc/system_wrappers/include/field_trial.h"
 #if defined(WEBRTC_WIN)
 #include "talk/owt/sdk/base/win/msdkvideodecoderfactory.h"
@@ -124,6 +129,31 @@ void PeerConnectionDependencyFactory::
   RTC_CHECK(worker_thread->Start() && signaling_thread->Start() &&
             network_thread->Start())
       << "Failed to start threads";
+
+  // [CONN-DIAG] Make media-critical libwebrtc threads real-time so they are
+  // not CPU-starved under heavy load (e.g. co-located transcoding workloads).
+  // A starved network_thread cannot drain UDP sockets in time; the kernel drops
+  // inbound STUN consent-freshness keepalives; the browser then sees no response
+  // for ~15s, declares ICE failed, and tears the stream down. SCHED_RR lets
+  // these threads preempt transcoders just long enough to answer STUN and move
+  // media. Best-effort: logs but does not abort if CAP_SYS_NICE is unavailable.
+  auto make_realtime = [](rtc::Thread* t, const char* tname) {
+    if (t == nullptr) return;
+    t->Invoke<void>(RTC_FROM_HERE, [tname]() {
+      struct sched_param sp;
+      std::memset(&sp, 0, sizeof(sp));
+      sp.sched_priority = 20;  // modest RT priority, well below kernel threads
+      if (pthread_setschedparam(pthread_self(), SCHED_RR, &sp) != 0) {
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] could NOT set SCHED_RR on " << tname
+                          << " (need CAP_SYS_NICE): " << std::strerror(errno);
+      } else {
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] " << tname << " set to SCHED_RR prio 20";
+      }
+    });
+  };
+  make_realtime(network_thread.get(), "network_thread");
+  // make_realtime(worker_thread.get(), "worker_thread");
+  // make_realtime(signaling_thread.get(), "signaling_thread");
 
   // Use webrtc::VideoEn(De)coderFactory on iOS.
   std::unique_ptr<webrtc::VideoEncoderFactory> encoder_factory;
