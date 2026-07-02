@@ -134,33 +134,28 @@ void PeerConnectionDependencyFactory::
   // transcoders to answer STUN keepalives; otherwise it starves, the kernel
   // drops keepalives, and the browser declares ICE failed (~15s) and drops the
   // stream. Best-effort: never crashes; logs and continues if it can't apply.
+  // Non-throwing: none of pthread_setschedparam / RTC_LOG / strerror throw, and
+  // OWT is built with -fno-exceptions, so no try/catch is possible or needed —
+  // a scheduling failure just logs and continues, never crashing the binary.
   auto make_realtime = [](rtc::Thread* t, const char* tname) {
     if (t == nullptr) return;
-    try {
-      t->Invoke<void>(RTC_FROM_HERE, [tname]() {
-        struct sched_param sp;
-        std::memset(&sp, 0, sizeof(sp));
-        sp.sched_priority = 20;  // modest RT priority, well below kernel threads
-        // pthread_setschedparam returns the error code directly and does NOT set
-        // errno — must use the return value, not errno, to report the failure.
-        int rc = pthread_setschedparam(pthread_self(), SCHED_RR, &sp);
-        if (rc != 0) {
-          RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_failed thread=" << tname
-                            << " prio=20 err=" << std::strerror(rc);
-        } else {
-          // LS_ERROR (not LS_INFO): OWT is set to kError severity which drops
-          // LS_INFO. This is informational, not a real error.
-          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_applied thread=" << tname
-                            << " prio=20";
-        }
-      });
-    } catch (const std::exception& e) {
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_exception thread=" << tname
-                        << " err=" << e.what();
-    } catch (...) {
-      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_exception thread=" << tname
-                        << " err=unknown";
-    }
+    t->Invoke<void>(RTC_FROM_HERE, [tname]() {
+      struct sched_param sp;
+      std::memset(&sp, 0, sizeof(sp));
+      sp.sched_priority = 20;  // modest RT priority, well below kernel threads
+      // pthread_setschedparam returns the error code directly and does NOT set
+      // errno — must use the return value, not errno, to report the failure.
+      int rc = pthread_setschedparam(pthread_self(), SCHED_RR, &sp);
+      if (rc != 0) {
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_failed thread=" << tname
+                          << " prio=20 err=" << std::strerror(rc);
+      } else {
+        // LS_ERROR (not LS_INFO): OWT is set to kError severity which drops
+        // LS_INFO. This is informational, not a real error.
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_applied thread=" << tname
+                          << " prio=20";
+      }
+    });
   };
   make_realtime(network_thread.get(), "network_thread");
 
