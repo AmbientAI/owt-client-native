@@ -10,7 +10,7 @@
 using namespace rtc;
 namespace owt {
 namespace base {
-static constexpr int kBweOptimizationSettingsMinBitrateBps = 500000;  // 500 kbps
+static constexpr int kBweOptimizationSettingsMinBitrateBps = 32000000;  // 32 Mbps
 static constexpr double kVideoBitratePriority = 1.0;                  // Equal across all tiles
 PeerConnectionChannel::PeerConnectionChannel(
     PeerConnectionChannelConfiguration configuration)
