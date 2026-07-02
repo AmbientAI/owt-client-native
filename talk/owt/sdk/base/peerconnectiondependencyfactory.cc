@@ -130,27 +130,37 @@ void PeerConnectionDependencyFactory::
             network_thread->Start())
       << "Failed to start threads";
 
-  // [CONN-DIAG] Make media-critical libwebrtc threads real-time so they are
-  // not CPU-starved under heavy load (e.g. co-located transcoding workloads).
-  // A starved network_thread cannot drain UDP sockets in time; the kernel drops
-  // inbound STUN consent-freshness keepalives; the browser then sees no response
-  // for ~15s, declares ICE failed, and tears the stream down. SCHED_RR lets
-  // these threads preempt transcoders just long enough to answer STUN and move
-  // media. Best-effort: logs but does not abort if CAP_SYS_NICE is unavailable.
+  // [CONN-DIAG] Give network_thread SCHED_RR so it preempts co-located
+  // transcoders to answer STUN keepalives; otherwise it starves, the kernel
+  // drops keepalives, and the browser declares ICE failed (~15s) and drops the
+  // stream. Best-effort: never crashes; logs and continues if it can't apply.
   auto make_realtime = [](rtc::Thread* t, const char* tname) {
     if (t == nullptr) return;
-    t->Invoke<void>(RTC_FROM_HERE, [tname]() {
-      struct sched_param sp;
-      std::memset(&sp, 0, sizeof(sp));
-      sp.sched_priority = 20;  // modest RT priority, well below kernel threads
-      if (pthread_setschedparam(pthread_self(), SCHED_RR, &sp) != 0) {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_failed thread=" << tname
-                          << " prio=20 err=" << std::strerror(errno);
-      } else {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_applied thread=" << tname
-                          << " prio=20";
-      }
-    });
+    try {
+      t->Invoke<void>(RTC_FROM_HERE, [tname]() {
+        struct sched_param sp;
+        std::memset(&sp, 0, sizeof(sp));
+        sp.sched_priority = 20;  // modest RT priority, well below kernel threads
+        // pthread_setschedparam returns the error code directly and does NOT set
+        // errno — must use the return value, not errno, to report the failure.
+        int rc = pthread_setschedparam(pthread_self(), SCHED_RR, &sp);
+        if (rc != 0) {
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_failed thread=" << tname
+                            << " prio=20 err=" << std::strerror(rc);
+        } else {
+          // LS_ERROR (not LS_INFO): OWT is set to kError severity which drops
+          // LS_INFO. This is informational, not a real error.
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_applied thread=" << tname
+                            << " prio=20";
+        }
+      });
+    } catch (const std::exception& e) {
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_exception thread=" << tname
+                        << " err=" << e.what();
+    } catch (...) {
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_exception thread=" << tname
+                        << " err=unknown";
+    }
   };
   make_realtime(network_thread.get(), "network_thread");
 
