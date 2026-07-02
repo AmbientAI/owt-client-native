@@ -144,16 +144,15 @@ void PeerConnectionDependencyFactory::
       std::memset(&sp, 0, sizeof(sp));
       sp.sched_priority = 20;  // modest RT priority, well below kernel threads
       if (pthread_setschedparam(pthread_self(), SCHED_RR, &sp) != 0) {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG] could NOT set SCHED_RR on " << tname
-                          << " (need CAP_SYS_NICE): " << std::strerror(errno);
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_failed thread=" << tname
+                          << " prio=20 err=" << std::strerror(errno);
       } else {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG] " << tname << " set to SCHED_RR prio 20";
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_applied thread=" << tname
+                          << " prio=20";
       }
     });
   };
   make_realtime(network_thread.get(), "network_thread");
-  // make_realtime(worker_thread.get(), "worker_thread");
-  // make_realtime(signaling_thread.get(), "signaling_thread");
 
   // Use webrtc::VideoEn(De)coderFactory on iOS.
   std::unique_ptr<webrtc::VideoEncoderFactory> encoder_factory;
