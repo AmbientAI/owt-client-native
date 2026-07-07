@@ -21,10 +21,13 @@
 #include "webrtc/rtc_base/ssl_adapter.h"
 #include "webrtc/rtc_base/thread.h"
 #include "webrtc/rtc_base/logging.h"
+#if defined(WEBRTC_LINUX)
+// POSIX real-time scheduling for network_thread — Linux only.
 #include <pthread.h>
 #include <sched.h>
 #include <cstring>
 #include <cerrno>
+#endif
 #include "webrtc/system_wrappers/include/field_trial.h"
 #if defined(WEBRTC_WIN)
 #include "talk/owt/sdk/base/win/msdkvideodecoderfactory.h"
@@ -130,6 +133,7 @@ void PeerConnectionDependencyFactory::
             network_thread->Start())
       << "Failed to start threads";
 
+#if defined(WEBRTC_LINUX)
   // [CONN-DIAG] Give network_thread SCHED_RR so it preempts co-located
   // transcoders to answer STUN keepalives; otherwise it starves, the kernel
   // drops keepalives, and the browser declares ICE failed (~15s) and drops the
@@ -137,6 +141,8 @@ void PeerConnectionDependencyFactory::
   // Non-throwing: none of pthread_setschedparam / RTC_LOG / strerror throw, and
   // OWT is built with -fno-exceptions, so no try/catch is possible or needed —
   // a scheduling failure just logs and continues, never crashing the binary.
+  // Linux-only: pthread_setschedparam / SCHED_RR are POSIX and this binary only
+  // ships on Linux appliances.
   auto make_realtime = [](rtc::Thread* t, const char* tname) {
     if (t == nullptr) return;
     t->Invoke<void>(RTC_FROM_HERE, [tname]() {
@@ -158,6 +164,7 @@ void PeerConnectionDependencyFactory::
     });
   };
   make_realtime(network_thread.get(), "network_thread");
+#endif  // WEBRTC_LINUX
 
   // Use webrtc::VideoEn(De)coderFactory on iOS.
   std::unique_ptr<webrtc::VideoEncoderFactory> encoder_factory;
