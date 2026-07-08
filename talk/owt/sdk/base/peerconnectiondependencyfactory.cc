@@ -20,6 +20,14 @@
 #include "webrtc/rtc_base/bind.h"
 #include "webrtc/rtc_base/ssl_adapter.h"
 #include "webrtc/rtc_base/thread.h"
+#include "webrtc/rtc_base/logging.h"
+#if defined(WEBRTC_LINUX)
+// POSIX real-time scheduling for network_thread — Linux only.
+#include <pthread.h>
+#include <sched.h>
+#include <cstring>
+#include <cerrno>
+#endif
 #include "webrtc/system_wrappers/include/field_trial.h"
 #if defined(WEBRTC_WIN)
 #include "talk/owt/sdk/base/win/msdkvideodecoderfactory.h"
@@ -124,6 +132,39 @@ void PeerConnectionDependencyFactory::
   RTC_CHECK(worker_thread->Start() && signaling_thread->Start() &&
             network_thread->Start())
       << "Failed to start threads";
+
+#if defined(WEBRTC_LINUX)
+  // [CONN-DIAG] Give network_thread SCHED_RR so it preempts co-located
+  // transcoders to answer STUN keepalives; otherwise it starves, the kernel
+  // drops keepalives, and the browser declares ICE failed (~15s) and drops the
+  // stream. Best-effort: never crashes; logs and continues if it can't apply.
+  // Non-throwing: none of pthread_setschedparam / RTC_LOG / strerror throw, and
+  // OWT is built with -fno-exceptions, so no try/catch is possible or needed —
+  // a scheduling failure just logs and continues, never crashing the binary.
+  // Linux-only: pthread_setschedparam / SCHED_RR are POSIX and this binary only
+  // ships on Linux appliances.
+  auto make_realtime = [](rtc::Thread* t, const char* tname) {
+    if (t == nullptr) return;
+    t->Invoke<void>(RTC_FROM_HERE, [tname]() {
+      struct sched_param sp;
+      std::memset(&sp, 0, sizeof(sp));
+      sp.sched_priority = 20;  // modest RT priority, well below kernel threads
+      // pthread_setschedparam returns the error code directly and does NOT set
+      // errno — must use the return value, not errno, to report the failure.
+      int rc = pthread_setschedparam(pthread_self(), SCHED_RR, &sp);
+      if (rc != 0) {
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=sched_rr_failed thread=" << tname
+                          << " prio=20 err=" << std::strerror(rc);
+      } else {
+        // LS_ERROR (not LS_INFO): OWT is set to kError severity which drops
+        // LS_INFO. This is informational, not a real error.
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_applied thread=" << tname
+                          << " prio=20";
+      }
+    });
+  };
+  make_realtime(network_thread.get(), "network_thread");
+#endif  // WEBRTC_LINUX
 
   // Use webrtc::VideoEn(De)coderFactory on iOS.
   std::unique_ptr<webrtc::VideoEncoderFactory> encoder_factory;
