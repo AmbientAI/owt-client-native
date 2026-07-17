@@ -89,6 +89,22 @@ class GlobalConfiguration {
     return bwe_optimization_settings_enabled_;
   }
   /**
+   @brief Enable/disable promoting the libwebrtc network_thread to SCHED_RR
+   real-time scheduling. Enabled by default; can be turned off per node via
+   config where a spinning network_thread would peg a CPU core.
+   @param enabled Whether network_thread should run at real-time priority.
+   */
+  static void SetNetworkThreadRealtimeEnabled(bool enabled) {
+    network_thread_realtime_enabled_ = enabled;
+  }
+  /**
+   @brief This function gets whether network_thread real-time scheduling is enabled.
+   @return true or false.
+   */
+  static bool GetNetworkThreadRealtimeEnabled() {
+    return network_thread_realtime_enabled_;
+  }
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -259,6 +275,10 @@ class GlobalConfiguration {
    * Default is false. If it is set to true, uses BWE optimization settings.
    */
   static bool bwe_optimization_settings_enabled_;
+  /**
+   * Default is true. If true, network_thread is promoted to SCHED_RR.
+   */
+  static bool network_thread_realtime_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not
