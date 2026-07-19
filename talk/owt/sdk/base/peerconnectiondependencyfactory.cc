@@ -163,7 +163,15 @@ void PeerConnectionDependencyFactory::
       }
     });
   };
-  make_realtime(network_thread.get(), "network_thread");
+  // ON by default fleet-wide; node config kill-switch (bridged from NodeConfig
+  // in main.cc) can disable it on a node where network_thread spins and pegs a
+  // core, without a binary rollback.
+  if (GlobalConfiguration::GetNetworkThreadRealtimeEnabled()) {
+    make_realtime(network_thread.get(), "network_thread");
+  } else {
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sched_rr_skipped thread=network_thread"
+                      << " reason=disabled_by_config";
+  }
 #endif  // WEBRTC_LINUX
 
   // Use webrtc::VideoEn(De)coderFactory on iOS.
