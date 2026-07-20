@@ -90,8 +90,8 @@ class GlobalConfiguration {
   }
   /**
    @brief Enable/disable promoting the libwebrtc network_thread to SCHED_RR
-   real-time scheduling. Enabled by default; can be turned off per node via
-   config where a spinning network_thread would peg a CPU core.
+   real-time scheduling. Disabled by default; opt-in per node via config because
+   SCHED_RR can peg sometime CPU core in some cases.
    @param enabled Whether network_thread should run at real-time priority.
    */
   static void SetNetworkThreadRealtimeEnabled(bool enabled) {
@@ -276,7 +276,7 @@ class GlobalConfiguration {
    */
   static bool bwe_optimization_settings_enabled_;
   /**
-   * Default is true. If true, network_thread is promoted to SCHED_RR.
+   * Default is false. If true, network_thread is promoted to SCHED_RR.
    */
   static bool network_thread_realtime_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
