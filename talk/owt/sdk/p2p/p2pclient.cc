@@ -388,8 +388,11 @@ PeerConnectionChannelConfiguration P2PClient::GetPeerConnectionChannelConfigurat
   // }
   // TODO(jianlin): For publisher, peerconnection is created before UA info is received.
   // so signaling protocol change is needed if we would like to remove this HC.
+  // AMBIENT: HC kept, flipped to GATHER_ONCE. Continual gathering never completes, so
+  // the allocator re-gathers every 5 min and retains ~4 UDP sockets/peer/round (10k+ in
+  // 40h, killed by the socket-leak watchdog). Local-only; the appliance never roams.
   config.continual_gathering_policy =
-      PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
+      PeerConnectionInterface::ContinualGatheringPolicy::GATHER_ONCE;
 
   // See webrtc/api/peer_connection_interface.h for details on the options
   // https://tools.ietf.org/html/draft-ietf-rtcweb-jsep-24#section-4.1.1
