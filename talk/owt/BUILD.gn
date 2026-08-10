@@ -82,6 +82,7 @@ static_library("owt_sdk_base") {
     "sdk/base/mediautils.cc",
     "sdk/base/mediautils.h",
     "sdk/base/peerconnectionchannel.cc",
+    "sdk/base/threaddiagnostics.cc",
     "sdk/base/peerconnectionchannel.h",
     "sdk/base/peerconnectiondependencyfactory.cc",
     "sdk/base/peerconnectiondependencyfactory.h",
@@ -105,6 +106,7 @@ static_library("owt_sdk_base") {
     "sdk/include/cpp/owt/base/localcamerastreamparameters.h",
     "sdk/include/cpp/owt/base/logging.h",
     "sdk/include/cpp/owt/base/stream.h",
+    "sdk/include/cpp/owt/base/threaddiagnostics.h",
     "sdk/include/cpp/owt/base/videorendererinterface.h",
   ]
   if (is_win || is_linux) {

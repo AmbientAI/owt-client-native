@@ -1,0 +1,116 @@
+From b2f227fcd1469834295e3bc45423db643135f857 Mon Sep 17 00:00:00 2001
+From: ambient <dev@ambient.ai>
+Date: Mon, 10 Aug 2026 16:06:54 +0000
+Subject: [PATCH] Publish in-flight dispatch state on rtc::Thread
+
+The existing slow-dispatch log only reports messages that have COMPLETED: Dispatch()
+times around OnMessage(), so a thread wedged inside a handler is invisible to it and
+Thread::Send does not time its waiting side at all. A stall that never resolves
+therefore produces no record of where it was.
+
+Thread now publishes the start time and posted-from call site of the dispatch it is
+currently running, and CurrentDispatchElapsedMs() lets another thread read it. That
+turns a wedge into an observable event with the exact call site, without ptrace,
+signals or stack unwinding.
+
+Costs four relaxed atomic stores per dispatch and no additional clock read -
+start_time is already computed for the slow-dispatch threshold.
+---
+ rtc_base/thread.cc | 26 ++++++++++++++++++++++++++
+ rtc_base/thread.h  | 21 +++++++++++++++++++++
+ 2 files changed, 47 insertions(+)
+
+diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
+index a8cb022fa9..5d07e40ef8 100644
+--- a/rtc_base/thread.cc
++++ b/rtc_base/thread.cc
+@@ -661,7 +661,16 @@ void Thread::Dispatch(Message* pmsg) {
+                pmsg->posted_from.file_name(), "src_func",
+                pmsg->posted_from.function_name());
+   int64_t start_time = TimeMillis();
++  // Publish the in-flight dispatch before running it. No extra clock read: start_time
++  // is already computed for the slow-dispatch log below. Order matters — file and line
++  // first, start last — so a concurrent reader that sees a non-zero start also sees a
++  // coherent call site.
++  cur_dispatch_file_.store(pmsg->posted_from.file_name(), std::memory_order_relaxed);
++  cur_dispatch_line_.store(pmsg->posted_from.line_number(), std::memory_order_relaxed);
++  cur_dispatch_start_ms_.store(start_time, std::memory_order_release);
+   pmsg->phandler->OnMessage(pmsg);
++  // Retract start first, for the same reason.
++  cur_dispatch_start_ms_.store(0, std::memory_order_release);
+   int64_t end_time = TimeMillis();
+   int64_t diff = TimeDiff(end_time, start_time);
+   if (diff >= kSlowDispatchLoggingThreshold) {
+@@ -671,6 +680,23 @@ void Thread::Dispatch(Message* pmsg) {
+   }
+ }
+ 
++int64_t Thread::CurrentDispatchElapsedMs(const char** posted_from_file,
++                                        int* posted_from_line) const {
++  const int64_t start = cur_dispatch_start_ms_.load(std::memory_order_acquire);
++  if (start == 0) {
++    return 0;  // not dispatching
++  }
++  if (posted_from_file) {
++    *posted_from_file = cur_dispatch_file_.load(std::memory_order_relaxed);
++  }
++  if (posted_from_line) {
++    *posted_from_line = cur_dispatch_line_.load(std::memory_order_relaxed);
++  }
++  const int64_t elapsed = TimeDiff(TimeMillis(), start);
++  // Never return 0 while dispatching, so callers can use 0 to mean "idle".
++  return elapsed > 0 ? elapsed : 1;
++}
++
+ bool Thread::IsCurrent() const {
+   return ThreadManager::Instance()->CurrentThread() == this;
+ }
+diff --git a/rtc_base/thread.h b/rtc_base/thread.h
+index 74aab623c8..c0cbc03488 100644
+--- a/rtc_base/thread.h
++++ b/rtc_base/thread.h
+@@ -13,6 +13,8 @@
+ 
+ #include <stdint.h>
+ 
++#include <atomic>
++
+ #include <list>
+ #include <map>
+ #include <memory>
+@@ -260,6 +262,18 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+                      MessageList* removed = nullptr);
+   virtual void Dispatch(Message* pmsg);
+ 
++  // Milliseconds spent inside the *current* Dispatch, or 0 when this thread is not
++  // dispatching. Safe to call from another thread: the values are published by the
++  // dispatching thread and Location's char* are compile-time literals with static
++  // lifetime, so a reader can never dangle.
++  //
++  // The existing "Message took Nms to dispatch" log only reports messages that have
++  // COMPLETED, so a thread wedged inside OnMessage() is invisible to it. This lets an
++  // out-of-band watchdog observe the wedge while it is still happening, and name the
++  // call site the message was posted from.
++  int64_t CurrentDispatchElapsedMs(const char** posted_from_file,
++                                   int* posted_from_line) const;
++
+   // Amount of time until the next message can be retrieved
+   virtual int GetDelay();
+ 
+@@ -596,6 +610,13 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+   // Runs webrtc::QueuedTask posted to the Thread.
+   QueuedTaskHandler queued_task_handler_;
+ 
++  // In-flight Dispatch, published for CurrentDispatchElapsedMs(). Written only by
++  // this thread, read by any. start is published last and retracted first, so a
++  // reader that observes a non-zero start already sees a valid file/line pair.
++  std::atomic<int64_t> cur_dispatch_start_ms_{0};
++  std::atomic<const char*> cur_dispatch_file_{nullptr};
++  std::atomic<int> cur_dispatch_line_{0};
++
+   friend class ThreadManager;
+ 
+   RTC_DISALLOW_COPY_AND_ASSIGN(Thread);
+-- 
+2.25.1
+
