@@ -88,6 +88,36 @@ PeerConnectionDependencyFactory::CreatePeerConnection(
                               this, config, observer))
       .get();
 }
+PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::PeekExisting() {
+  return dependency_factory_.get();
+}
+
+std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatches()
+    const {
+  std::vector<InFlightDispatch> out;
+  const std::pair<const char*, rtc::Thread*> threads[] = {
+      {"signaling_thread", signaling_thread.get()},
+      {"worker_thread", worker_thread.get()},
+      {"network_thread", network_thread.get()},
+  };
+  for (const auto& entry : threads) {
+    if (entry.second == nullptr) {
+      continue;
+    }
+    InFlightDispatch info;
+    info.thread_name = entry.first;
+    const char* file = nullptr;
+    int line = 0;
+    info.elapsed_ms = entry.second->CurrentDispatchElapsedMs(&file, &line);
+    if (info.elapsed_ms > 0 && file != nullptr) {
+      info.posted_from_file = file;
+      info.posted_from_line = line;
+    }
+    out.push_back(std::move(info));
+  }
+  return out;
+}
+
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::Get() {
   std::call_once(get_pcdf_once, []() {
     dependency_factory_ =
