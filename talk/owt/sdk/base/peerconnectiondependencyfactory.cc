@@ -107,6 +107,10 @@ std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatche
     const {
   std::vector<InFlightDispatch> out;
   const std::pair<const char*, rtc::Thread*> threads[] = {
+      // pc_thread_ first because it is the one that matters most: every
+      // CreateLocalMediaStream / CreateLocalVideoTrack / CreateLocalAudioTrack is a
+      // blocking Invoke onto it, so it is where a publishing caller waits.
+      {"pc_thread", pc_thread_.get()},
       {"signaling_thread", signaling_thread.get()},
       {"worker_thread", worker_thread.get()},
       {"network_thread", network_thread.get()},
