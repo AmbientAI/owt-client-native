@@ -121,6 +121,7 @@ std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatche
     }
     InFlightDispatch info;
     info.thread_name = entry.first;
+    info.tid = static_cast<int32_t>(entry.second->os_thread_id());
     const char* file = nullptr;
     int line = 0;
     info.elapsed_ms = entry.second->CurrentDispatchElapsedMs(&file, &line);

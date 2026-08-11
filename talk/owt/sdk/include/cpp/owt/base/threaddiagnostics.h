@@ -15,6 +15,10 @@ namespace base {
 struct InFlightDispatch {
   /// "pc_thread", "signaling_thread", "worker_thread" or "network_thread".
   std::string thread_name;
+  /// OS thread id, for /proc/<tid>; 0 if the thread has not started. Reported whether or
+  /// not the thread is dispatching, because an idle thread's wchan is what separates
+  /// "waiting for work" from "blocked acquiring the queue lock".
+  int32_t tid = 0;
   /// Milliseconds in the dispatch currently running; 0 when idle.
   int64_t elapsed_ms = 0;
   /// Source file the running message was posted from; empty when idle.
@@ -38,7 +42,7 @@ class ThreadDiagnostics final {
 
    Safe to call from any thread. Never constructs the peer-connection factory — returns
    an empty vector if it does not already exist — so polling an idle node is inert.
-   Entries with elapsed_ms == 0 are idle.
+   Every live thread gets an entry; elapsed_ms == 0 means idle, not absent.
    */
   static std::vector<InFlightDispatch> InFlightDispatches();
 };

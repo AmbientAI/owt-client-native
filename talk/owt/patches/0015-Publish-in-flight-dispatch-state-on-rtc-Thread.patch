@@ -1,7 +1,8 @@
-From ddd86b2f0687b5abe0cd54f6a3c07cf068cb1e6e Mon Sep 17 00:00:00 2001
+From 73240849b6953f908eb1c3f3addab332e17c0999 Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Mon, 10 Aug 2026 16:06:54 +0000
-Subject: [PATCH] Publish in-flight dispatch state on rtc::Thread
+Subject: [PATCH] Publish in-flight dispatch state and the OS thread id on
+ rtc::Thread
 
 The existing slow-dispatch log only reports messages that have COMPLETED: Dispatch()
 times around OnMessage(), so a thread wedged inside a handler is invisible to it and
@@ -13,15 +14,20 @@ currently running, and CurrentDispatchElapsedMs() lets another thread read it. T
 turns a wedge into an observable event with the exact call site, without ptrace,
 signals or stack unwinding.
 
+Thread also publishes its OS thread id. Only pthread_t was stored, which cannot be
+converted to a tid, so a caller had no way to pair a Thread with /proc/<tid> and read
+its wchan without guessing from thread names.
+
 Costs four relaxed atomic stores per dispatch and no additional clock read -
-start_time is already computed for the slow-dispatch threshold.
+start_time is already computed for the slow-dispatch threshold - plus one store per
+thread at startup.
 ---
- rtc_base/thread.cc | 34 ++++++++++++++++++++++++++++++++++
- rtc_base/thread.h  | 16 ++++++++++++++++
- 2 files changed, 50 insertions(+)
+ rtc_base/thread.cc | 37 +++++++++++++++++++++++++++++++++++++
+ rtc_base/thread.h  | 27 +++++++++++++++++++++++++++
+ 2 files changed, 64 insertions(+)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..5325b09955 100644
+index a8cb022fa9..d915f4fec0 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
 @@ -661,7 +661,24 @@ void Thread::Dispatch(Message* pmsg) {
@@ -73,8 +79,18 @@ index a8cb022fa9..5325b09955 100644
  bool Thread::IsCurrent() const {
    return ThreadManager::Instance()->CurrentThread() == this;
  }
+@@ -824,6 +858,9 @@ void* Thread::PreRun(void* pv) {
+   Thread* thread = static_cast<Thread*>(pv);
+   ThreadManager::Instance()->SetCurrentThread(thread);
+   rtc::SetCurrentThreadName(thread->name_.c_str());
++  // Beside SetCurrentThreadName because both answer "which OS thread is this", and this
++  // is the only place that runs on the thread before its loop starts.
++  thread->tid_.store(rtc::CurrentThreadId(), std::memory_order_relaxed);
+   CurrentTaskQueueSetter set_current_task_queue(thread);
+ #if defined(WEBRTC_MAC)
+   ScopedAutoReleasePool pool;
 diff --git a/rtc_base/thread.h b/rtc_base/thread.h
-index 74aab623c8..81a04e8813 100644
+index 74aab623c8..3f88399cba 100644
 --- a/rtc_base/thread.h
 +++ b/rtc_base/thread.h
 @@ -13,6 +13,8 @@
@@ -86,7 +102,7 @@ index 74aab623c8..81a04e8813 100644
  #include <list>
  #include <map>
  #include <memory>
-@@ -260,6 +262,13 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+@@ -260,6 +262,20 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
                       MessageList* removed = nullptr);
    virtual void Dispatch(Message* pmsg);
  
@@ -97,10 +113,17 @@ index 74aab623c8..81a04e8813 100644
 +  int64_t CurrentDispatchElapsedMs(const char** posted_from_file,
 +                                   int* posted_from_line) const;
 +
++  // OS thread id, 0 before the thread starts. Only pthread_t is stored otherwise, and it
++  // cannot be converted to a tid, so without this a caller cannot pair a Thread with
++  // /proc/<tid> to read wchan.
++  PlatformThreadId os_thread_id() const {
++    return tid_.load(std::memory_order_relaxed);
++  }
++
    // Amount of time until the next message can be retrieved
    virtual int GetDelay();
  
-@@ -596,6 +605,13 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+@@ -596,6 +612,17 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
    // Runs webrtc::QueuedTask posted to the Thread.
    QueuedTaskHandler queued_task_handler_;
  
@@ -110,6 +133,10 @@ index 74aab623c8..81a04e8813 100644
 +  std::atomic<int64_t> cur_dispatch_start_ms_{0};
 +  std::atomic<const char*> cur_dispatch_file_{nullptr};
 +  std::atomic<int> cur_dispatch_line_{0};
++
++  // Published once by PreRun, which is the only code that runs on this thread before its
++  // message loop. See os_thread_id().
++  std::atomic<PlatformThreadId> tid_{0};
 +
    friend class ThreadManager;
  
