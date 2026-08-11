@@ -82,7 +82,6 @@ static_library("owt_sdk_base") {
     "sdk/base/mediautils.cc",
     "sdk/base/mediautils.h",
     "sdk/base/peerconnectionchannel.cc",
-    "sdk/base/threaddiagnostics.cc",
     "sdk/base/peerconnectionchannel.h",
     "sdk/base/peerconnectiondependencyfactory.cc",
     "sdk/base/peerconnectiondependencyfactory.h",
