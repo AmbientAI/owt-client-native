@@ -13,7 +13,7 @@ namespace base {
 
 /// In-flight dispatch state of one internal libwebrtc thread.
 struct InFlightDispatch {
-  /// "signaling_thread", "worker_thread" or "network_thread".
+  /// "pc_thread", "signaling_thread", "worker_thread" or "network_thread".
   std::string thread_name;
   /// Milliseconds in the dispatch currently running; 0 when idle.
   int64_t elapsed_ms = 0;
@@ -34,7 +34,7 @@ struct InFlightDispatch {
 class ThreadDiagnostics final {
  public:
   /**
-   @brief In-flight dispatch state of the three internal threads.
+   @brief In-flight dispatch state of the internal threads.
 
    Safe to call from any thread. Never constructs the peer-connection factory — returns
    an empty vector if it does not already exist — so polling an idle node is inert.

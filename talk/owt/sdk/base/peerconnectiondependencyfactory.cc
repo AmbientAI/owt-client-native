@@ -133,6 +133,17 @@ std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatche
   return out;
 }
 
+std::vector<InFlightDispatch> ThreadDiagnostics::InFlightDispatches() {
+  // PeekExisting(), never Get(): Get() constructs the factory, so polling diagnostics
+  // through it would spin up libwebrtc on a node that never published anything.
+  PeerConnectionDependencyFactory* factory =
+      PeerConnectionDependencyFactory::PeekExisting();
+  if (factory == nullptr) {
+    return std::vector<InFlightDispatch>();
+  }
+  return factory->InFlightDispatches();
+}
+
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::Get() {
   std::call_once(get_pcdf_once, []() {
     dependency_factory_ =
