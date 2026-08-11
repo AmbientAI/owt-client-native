@@ -6,6 +6,8 @@
 #include "talk/owt/sdk/base/customizedaudiodevicemodule.h"
 #endif
 #include "talk/owt/sdk/base/encodedvideoencoderfactory.h"
+#include <atomic>
+
 #include "talk/owt/sdk/base/peerconnectiondependencyfactory.h"
 #include "webrtc/api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "webrtc/api/audio_codecs/builtin_audio_encoder_factory.h"
@@ -57,6 +59,9 @@ PeerConnectionThread::~PeerConnectionThread() {
 rtc::scoped_refptr<PeerConnectionDependencyFactory>
     PeerConnectionDependencyFactory::dependency_factory_;
 std::once_flag get_pcdf_once;
+// Set after CreatePeerConnectionFactory() completes, so PeekExisting() never hands out a
+// factory whose threads are still being constructed.
+std::atomic<bool> pcdf_ready{false};
 PeerConnectionDependencyFactory::PeerConnectionDependencyFactory()
     : pc_thread_(rtc::Thread::CreateWithSocketServer()),
       callback_thread_(rtc::Thread::CreateWithSocketServer()),
@@ -89,6 +94,12 @@ PeerConnectionDependencyFactory::CreatePeerConnection(
       .get();
 }
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::PeekExisting() {
+  // Not merely non-null. Get() publishes dependency_factory_ before
+  // CreatePeerConnectionFactory() builds the threads, so a caller could otherwise observe
+  // a half-built factory and read signaling_thread while it is still being assigned.
+  if (!pcdf_ready.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
   return dependency_factory_.get();
 }
 
@@ -123,6 +134,8 @@ PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::Get() {
     dependency_factory_ =
         new rtc::RefCountedObject<PeerConnectionDependencyFactory>();
     dependency_factory_->CreatePeerConnectionFactory();
+    // Publish only once the threads exist; see PeekExisting().
+    pcdf_ready.store(true, std::memory_order_release);
   });
   return dependency_factory_.get();
 }

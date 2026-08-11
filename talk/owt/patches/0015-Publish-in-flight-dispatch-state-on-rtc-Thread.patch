@@ -1,4 +1,4 @@
-From 2fcac33509ef736bbaeb386c7dcce35fcaed9f95 Mon Sep 17 00:00:00 2001
+From ddd86b2f0687b5abe0cd54f6a3c07cf068cb1e6e Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Mon, 10 Aug 2026 16:06:54 +0000
 Subject: [PATCH] Publish in-flight dispatch state on rtc::Thread
@@ -16,30 +16,40 @@ signals or stack unwinding.
 Costs four relaxed atomic stores per dispatch and no additional clock read -
 start_time is already computed for the slow-dispatch threshold.
 ---
- rtc_base/thread.cc | 24 ++++++++++++++++++++++++
- rtc_base/thread.h  | 15 +++++++++++++++
- 2 files changed, 39 insertions(+)
+ rtc_base/thread.cc | 34 ++++++++++++++++++++++++++++++++++
+ rtc_base/thread.h  | 16 ++++++++++++++++
+ 2 files changed, 50 insertions(+)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..bd157df008 100644
+index a8cb022fa9..5325b09955 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
-@@ -661,7 +661,14 @@ void Thread::Dispatch(Message* pmsg) {
+@@ -661,7 +661,24 @@ void Thread::Dispatch(Message* pmsg) {
                 pmsg->posted_from.file_name(), "src_func",
                 pmsg->posted_from.function_name());
    int64_t start_time = TimeMillis();
 +  // Publish before running. No extra clock read: start_time already exists for the
 +  // slow-dispatch log below. file/line first, start last — see thread.h.
++  //
++  // Saved and restored rather than cleared to 0: ProcessMessages() is the only caller of
++  // Dispatch, and a handler is free to re-enter it, so dispatches can nest. Clearing
++  // would make the outer handler look idle as soon as an inner one returned — the exact
++  // false negative this exists to prevent. Restoring reports the OUTERMOST dispatch,
++  // which is what answers "how long has this thread been busy".
++  const int64_t prev_start = cur_dispatch_start_ms_.load(std::memory_order_relaxed);
++  const char* prev_file = cur_dispatch_file_.load(std::memory_order_relaxed);
++  const int prev_line = cur_dispatch_line_.load(std::memory_order_relaxed);
 +  cur_dispatch_file_.store(pmsg->posted_from.file_name(), std::memory_order_relaxed);
 +  cur_dispatch_line_.store(pmsg->posted_from.line_number(), std::memory_order_relaxed);
 +  cur_dispatch_start_ms_.store(start_time, std::memory_order_release);
    pmsg->phandler->OnMessage(pmsg);
-+  // Clear start first.
-+  cur_dispatch_start_ms_.store(0, std::memory_order_release);
++  cur_dispatch_file_.store(prev_file, std::memory_order_relaxed);
++  cur_dispatch_line_.store(prev_line, std::memory_order_relaxed);
++  cur_dispatch_start_ms_.store(prev_start, std::memory_order_release);
    int64_t end_time = TimeMillis();
    int64_t diff = TimeDiff(end_time, start_time);
    if (diff >= kSlowDispatchLoggingThreshold) {
-@@ -671,6 +678,23 @@ void Thread::Dispatch(Message* pmsg) {
+@@ -671,6 +688,23 @@ void Thread::Dispatch(Message* pmsg) {
    }
  }
  
@@ -64,7 +74,7 @@ index a8cb022fa9..bd157df008 100644
    return ThreadManager::Instance()->CurrentThread() == this;
  }
 diff --git a/rtc_base/thread.h b/rtc_base/thread.h
-index 74aab623c8..27c0bf0d9e 100644
+index 74aab623c8..81a04e8813 100644
 --- a/rtc_base/thread.h
 +++ b/rtc_base/thread.h
 @@ -13,6 +13,8 @@
@@ -90,12 +100,13 @@ index 74aab623c8..27c0bf0d9e 100644
    // Amount of time until the next message can be retrieved
    virtual int GetDelay();
  
-@@ -596,6 +605,12 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+@@ -596,6 +605,13 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
    // Runs webrtc::QueuedTask posted to the Thread.
    QueuedTaskHandler queued_task_handler_;
  
-+  // Published for CurrentDispatchElapsedMs(). start is stored last and cleared first, so
-+  // a reader seeing a non-zero start also sees a coherent file/line.
++  // Published for CurrentDispatchElapsedMs(). start is stored last, so a reader seeing a
++  // non-zero start also sees a coherent file/line. Dispatch saves and restores these
++  // rather than clearing them, because dispatches can nest.
 +  std::atomic<int64_t> cur_dispatch_start_ms_{0};
 +  std::atomic<const char*> cur_dispatch_file_{nullptr};
 +  std::atomic<int> cur_dispatch_line_{0};
