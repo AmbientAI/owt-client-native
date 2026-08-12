@@ -1,4 +1,4 @@
-From 15180315fb3564b35ef6ecabc73554adbeed3bce Mon Sep 17 00:00:00 2001
+From af79bebcadbd8f9120bb8d0de51ad7064772bdf8 Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -8,26 +8,16 @@ message waited in the queue before it ran, how deep the queue was when it was po
 and how long Clear held the queue lock. Also fixes that line naming thread.cc as the
 origin of every Send and Invoke instead of the real caller.
 ---
- rtc_base/thread.cc        | 61 ++++++++++++++++++++++++++++++++++-----
- rtc_base/thread.h         |  3 ++
+ rtc_base/thread.cc        | 54 +++++++++++++++++++++++++++++++++------
+ rtc_base/thread.h         |  3 +++
  rtc_base/thread_message.h |  4 ++-
- 3 files changed, 59 insertions(+), 9 deletions(-)
+ 3 files changed, 52 insertions(+), 9 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..86cd4d72ff 100644
+index a8cb022fa9..d20060a622 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
-@@ -69,6 +69,9 @@ namespace rtc {
- namespace {
- 
- const int kSlowDispatchLoggingThreshold = 50;  // 50 ms
-+const size_t kDeepQueueLoggingThreshold = 16;
-+// Clear scans both queues under the lock Get and Post need. ~40ns/message measured.
-+const int kSlowClearLoggingThreshold = 5;  // 5 ms
- 
- class MessageHandlerWithTask final : public MessageHandler {
-  public:
-@@ -529,6 +532,7 @@ void Thread::Post(const Location& posted_from,
+@@ -529,6 +529,7 @@ void Thread::Post(const Location& posted_from,
    // Add the message to the end of the queue
    // Signal for the multiplexer to return
  
@@ -35,7 +25,7 @@ index a8cb022fa9..86cd4d72ff 100644
    {
      CritScope cs(&crit_);
      Message msg;
-@@ -536,7 +540,17 @@ void Thread::Post(const Location& posted_from,
+@@ -536,8 +537,16 @@ void Thread::Post(const Location& posted_from,
      msg.phandler = phandler;
      msg.message_id = id;
      msg.pdata = pdata;
@@ -44,16 +34,15 @@ index a8cb022fa9..86cd4d72ff 100644
 +    }
      messages_.push_back(msg);
 +    depth = messages_.size();   // free here; reading it later would retake the lock
-+  }
-+  // Every post past the bar, not just the crossing: one line per queued message is the
-+  // point, and this only runs at INFO on a node opted in for an investigation.
-+  if (depth >= kDeepQueueLoggingThreshold) {
-+    RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
-+                     << " after posting from: " << posted_from.ToString();
    }
++  // Every post, so the count of posts per caller is itself the measurement. Only runs
++  // at INFO, on a node opted in for an investigation.
++  RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
++                   << " after posting from: " << posted_from.ToString();
    WakeUpSocketServer();
  }
-@@ -577,6 +591,10 @@ void Thread::DoDelayPost(const Location& posted_from,
+ 
+@@ -577,6 +586,10 @@ void Thread::DoDelayPost(const Location& posted_from,
    {
      CritScope cs(&crit_);
      Message msg;
@@ -64,7 +53,7 @@ index a8cb022fa9..86cd4d72ff 100644
      msg.posted_from = posted_from;
      msg.phandler = phandler;
      msg.message_id = id;
-@@ -665,9 +683,12 @@ void Thread::Dispatch(Message* pmsg) {
+@@ -665,9 +678,12 @@ void Thread::Dispatch(Message* pmsg) {
    int64_t end_time = TimeMillis();
    int64_t diff = TimeDiff(end_time, start_time);
    if (diff >= kSlowDispatchLoggingThreshold) {
@@ -80,7 +69,7 @@ index a8cb022fa9..86cd4d72ff 100644
    }
  }
  
-@@ -883,13 +904,15 @@ void Thread::Send(const Location& posted_from,
+@@ -883,13 +899,15 @@ void Thread::Send(const Location& posted_from,
                                                             this);
  #endif
    bool ready = false;
@@ -98,7 +87,7 @@ index a8cb022fa9..86cd4d72ff 100644
  
    bool waited = false;
    crit_.Enter();
-@@ -950,9 +973,14 @@ void Thread::QueuedTaskHandler::OnMessage(Message* msg) {
+@@ -950,9 +968,14 @@ void Thread::QueuedTaskHandler::OnMessage(Message* msg) {
  }
  
  void Thread::PostTask(std::unique_ptr<webrtc::QueuedTask> task) {
@@ -114,7 +103,7 @@ index a8cb022fa9..86cd4d72ff 100644
         /*id=*/0, new ScopedMessageData<webrtc::QueuedTask>(std::move(task)));
  }
  
-@@ -977,8 +1005,25 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -977,8 +1000,23 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
@@ -133,12 +122,10 @@ index a8cb022fa9..86cd4d72ff 100644
 +    done = TimeMillis();
 +  }
 +  // Logged after release: RTC_LOG would extend the hold it is reporting.
-+  if (scanned > 0 && TimeDiff(done, before_lock) >= kSlowClearLoggingThreshold) {
-+    RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
-+                     << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
-+                     << "held it " << TimeDiff(done, acquired) << "ms scanning "
-+                     << scanned << " messages.";
-+  }
++  RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
++                   << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
++                   << "held it " << TimeDiff(done, acquired) << "ms scanning "
++                   << scanned << " messages.";
  }
  
  bool Thread::ProcessMessages(int cmsLoop) {
