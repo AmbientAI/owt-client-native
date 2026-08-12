@@ -254,6 +254,21 @@ void PeerConnectionDependencyFactory::
       webrtc::CreateBuiltinAudioDecoderFactory(), std::move(encoder_factory),
       std::move(decoder_factory), nullptr, nullptr);
   pc_factory_->AddRef();
+  // AMBIENT: if a node configures an ICE interface ignore list, stand up a
+  // NetworkManager that filters those interfaces out of enumeration. Built on
+  // the network thread because that is where the allocator will run it.
+  const auto& ignore_list = GlobalConfiguration::GetIceNetworkIgnoreList();
+  if (!ignore_list.empty() && network_thread) {
+    network_thread->Invoke<void>(RTC_FROM_HERE, [this, &ignore_list] {
+      ice_socket_factory_ = std::make_unique<rtc::BasicPacketSocketFactory>(
+          network_thread.get());
+      ice_network_manager_ = std::make_unique<rtc::BasicNetworkManager>();
+      ice_network_manager_->set_network_ignore_list(ignore_list);
+    });
+    // LS_ERROR because OWT runs at kError severity and drops LS_INFO.
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=ice_network_ignore_list_configured"
+                      << " count=" << ignore_list.size();
+  }
   RTC_LOG(LS_INFO) << "CreatePeerConnectionOnCurrentThread finished.";
 }
 
@@ -261,7 +276,16 @@ scoped_refptr<webrtc::PeerConnectionInterface>
 PeerConnectionDependencyFactory::CreatePeerConnectionOnCurrentThread(
     const webrtc::PeerConnectionInterface::RTCConfiguration& config,
     webrtc::PeerConnectionObserver* observer) {
-  return (pc_factory_->CreatePeerConnection(config, nullptr, nullptr, observer))
+  // AMBIENT: pass an interface-filtered PortAllocator when configured, so no
+  // ports are created on interfaces that can never carry a connection. Falls
+  // back to the factory default (nullptr) when the feature is off.
+  std::unique_ptr<cricket::PortAllocator> allocator;
+  if (ice_network_manager_ && ice_socket_factory_) {
+    allocator = std::make_unique<cricket::BasicPortAllocator>(
+        ice_network_manager_.get(), ice_socket_factory_.get());
+  }
+  return (pc_factory_->CreatePeerConnection(config, std::move(allocator),
+                                           nullptr, observer))
       .get();
 }
 void PeerConnectionDependencyFactory::CreatePeerConnectionFactory() {

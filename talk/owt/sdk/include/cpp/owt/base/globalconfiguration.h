@@ -4,6 +4,8 @@
 #ifndef OWT_BASE_GLOBALCONFIGURATION_H_
 #define OWT_BASE_GLOBALCONFIGURATION_H_
 #include <memory>
+#include <string>
+#include <vector>
 #include "owt/base/framegeneratorinterface.h"
 #include "owt/base/videodecoderinterface.h"
 #if defined(WEBRTC_WIN)
@@ -103,6 +105,29 @@ class GlobalConfiguration {
    */
   static bool GetNetworkThreadRealtimeEnabled() {
     return network_thread_realtime_enabled_;
+  }
+  /**
+   @brief Set the list of local network interface names to exclude from ICE
+   candidate gathering.
+   @details Empty by default, which preserves existing behaviour. Interfaces on
+   this list are filtered out of network enumeration entirely, so no ports are
+   ever created on them. This exists because an interface that can never carry a
+   working connection is re-gathered indefinitely under continual gathering, and
+   its ports are never reclaimed - each round leaks a UDP socket. Opt in per
+   node via config; the correct list is deployment specific, and excluding an
+   interface removes it as a connectivity option for every peer.
+   @param interfaces Interface names to ignore, e.g. {"docker0", "br-lan"}.
+   */
+  static void SetIceNetworkIgnoreList(
+      const std::vector<std::string>& interfaces) {
+    ice_network_ignore_list_ = interfaces;
+  }
+  /**
+   @brief Get the ICE network ignore list.
+   @return Interface names excluded from ICE gathering; empty means none.
+   */
+  static const std::vector<std::string>& GetIceNetworkIgnoreList() {
+    return ice_network_ignore_list_;
   }
   /**
    @brief This function sets the audio input to be an instance of
@@ -279,6 +304,7 @@ class GlobalConfiguration {
    * Default is false. If true, network_thread is promoted to SCHED_RR.
    */
   static bool network_thread_realtime_enabled_;
+  static std::vector<std::string> ice_network_ignore_list_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not
