@@ -1,0 +1,155 @@
+From 377ad4657b4bbec8b6d3f40fa141ad2ee19e0fb5 Mon Sep 17 00:00:00 2001
+From: ambient <dev@ambient.ai>
+Date: Wed, 12 Aug 2026 13:59:41 +0000
+Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
+
+The slow-dispatch line reports only how long OnMessage() ran, so every other way a
+message can be delayed is invisible and indistinguishable from a slow handler.
+
+Message now carries when it was queued, and Dispatch subtracts it, so a slow message
+is split into time spent waiting and time spent running. Post reports queue depth,
+which separates one slow handler from fifty messages backed up behind it. Clear reports
+how long it waited for the queue lock and how long it held it while scanning, because
+that stalls the thread without any dispatch running at all.
+
+All at LS_INFO, beside the existing line. The clock read in the post path is gated on
+INFO being enabled, so a default build pays a severity check. Clear is a cold path and
+is not gated.
+
+Still completion-based: a dispatch that never returns logs nothing here.
+---
+ rtc_base/thread.cc        | 48 ++++++++++++++++++++++++++++++++++++---
+ rtc_base/thread_message.h |  6 ++++-
+ 2 files changed, 50 insertions(+), 4 deletions(-)
+
+diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
+index a8cb022fa9..2846e4fc88 100644
+--- a/rtc_base/thread.cc
++++ b/rtc_base/thread.cc
+@@ -69,6 +69,12 @@ namespace rtc {
+ namespace {
+ 
+ const int kSlowDispatchLoggingThreshold = 50;  // 50 ms
++// Queue depth at post time worth remarking on. A single slow handler and fifty queued
++// messages both show up as a slow dispatch downstream; this separates them.
++const size_t kDeepQueueLoggingThreshold = 16;
++// Clear() scans messages_ and delayed_messages_ linearly while holding the same lock
++// Get() and Post() need, so a long one stalls the thread without any dispatch running.
++const int kSlowClearLoggingThreshold = 20;  // 20 ms
+ 
+ class MessageHandlerWithTask final : public MessageHandler {
+  public:
+@@ -529,6 +535,7 @@ void Thread::Post(const Location& posted_from,
+   // Add the message to the end of the queue
+   // Signal for the multiplexer to return
+ 
++  size_t depth = 0;
+   {
+     CritScope cs(&crit_);
+     Message msg;
+@@ -536,7 +543,16 @@ void Thread::Post(const Location& posted_from,
+     msg.phandler = phandler;
+     msg.message_id = id;
+     msg.pdata = pdata;
++    // Gated: this is the hot path, and the reader of it only logs at INFO anyway.
++    if (RTC_LOG_CHECK_LEVEL(LS_INFO)) {
++      msg.posted_ms = TimeMillis();
++    }
+     messages_.push_back(msg);
++    depth = messages_.size();   // free here; reading it later would retake the lock
++  }
++  if (depth >= kDeepQueueLoggingThreshold) {
++    RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
++                     << " after posting from: " << posted_from.ToString();
+   }
+   WakeUpSocketServer();
+ }
+@@ -577,6 +593,11 @@ void Thread::DoDelayPost(const Location& posted_from,
+   {
+     CritScope cs(&crit_);
+     Message msg;
++    if (RTC_LOG_CHECK_LEVEL(LS_INFO)) {
++      // Its due time, not now: a delayed message is not waiting until it comes due, so
++      // measuring from the post would report the delay itself as queue wait.
++      msg.posted_ms = run_at_ms;
++    }
+     msg.posted_from = posted_from;
+     msg.phandler = phandler;
+     msg.message_id = id;
+@@ -665,9 +686,13 @@ void Thread::Dispatch(Message* pmsg) {
+   int64_t end_time = TimeMillis();
+   int64_t diff = TimeDiff(end_time, start_time);
+   if (diff >= kSlowDispatchLoggingThreshold) {
+-    RTC_LOG(LS_INFO) << "Message took " << diff
+-                     << "ms to dispatch. Posted from: "
+-                     << pmsg->posted_from.ToString();
++    // queued_ms is -1 when the sender skipped the clock read, so an unstamped message
++    // never reads as an instant one.
++    const int64_t queued_ms =
++        pmsg->posted_ms != 0 ? TimeDiff(start_time, pmsg->posted_ms) : -1;
++    RTC_LOG(LS_INFO) << "Message took " << diff << "ms to dispatch, after "
++                     << queued_ms << "ms queued on thread " << name_
++                     << ". Posted from: " << pmsg->posted_from.ToString();
+   }
+ }
+ 
+@@ -868,6 +893,9 @@ void Thread::Send(const Location& posted_from,
+   msg.phandler = phandler;
+   msg.message_id = id;
+   msg.pdata = pdata;
++  if (RTC_LOG_CHECK_LEVEL(LS_INFO)) {
++    msg.posted_ms = TimeMillis();
++  }
+   if (IsCurrent()) {
+     msg.phandler->OnMessage(&msg);
+     return;
+@@ -977,8 +1005,22 @@ bool Thread::IsProcessingMessagesForTesting() {
+ void Thread::Clear(MessageHandler* phandler,
+                    uint32_t id,
+                    MessageList* removed) {
++  // Timed on both sides. Waiting for the lock means somebody else is holding the queue;
++  // holding it long means this scan is what stalls everyone else. Neither shows up as a
++  // slow dispatch, because no dispatch is running. Cold path, so the clock reads are
++  // not worth gating.
++  const int64_t before_lock = TimeMillis();
+   CritScope cs(&crit_);
++  const int64_t acquired = TimeMillis();
++  const size_t scanned = messages_.size() + delayed_messages_.size();
+   ClearInternal(phandler, id, removed);
++  const int64_t done = TimeMillis();
++  if (TimeDiff(done, before_lock) >= kSlowClearLoggingThreshold) {
++    RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
++                     << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
++                     << "held it " << TimeDiff(done, acquired) << "ms scanning "
++                     << scanned << " messages.";
++  }
+ }
+ 
+ bool Thread::ProcessMessages(int cmsLoop) {
+diff --git a/rtc_base/thread_message.h b/rtc_base/thread_message.h
+index 80824e29e5..3d9611d091 100644
+--- a/rtc_base/thread_message.h
++++ b/rtc_base/thread_message.h
+@@ -101,7 +101,7 @@ const uint32_t MQID_DISPOSE = static_cast<uint32_t>(-2);
+ // No destructor
+ 
+ struct Message {
+-  Message() : phandler(nullptr), message_id(0), pdata(nullptr) {}
++  Message() : phandler(nullptr), message_id(0), pdata(nullptr), posted_ms(0) {}
+   inline bool Match(MessageHandler* handler, uint32_t id) const {
+     return (handler == nullptr || handler == phandler) &&
+            (id == MQID_ANY || id == message_id);
+@@ -110,6 +110,10 @@ struct Message {
+   MessageHandler* phandler;
+   uint32_t message_id;
+   MessageData* pdata;
++  // TimeMillis() when this was queued, or 0 when INFO logging is off and the senders
++  // skipped the clock read. Dispatch subtracts it to report queue wait, which is the
++  // half of a slow message that the dispatch time alone does not explain.
++  int64_t posted_ms;
+ };
+ 
+ typedef std::list<Message> MessageList;
+-- 
+2.25.1
+
