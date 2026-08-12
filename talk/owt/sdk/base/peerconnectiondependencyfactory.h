@@ -12,6 +12,9 @@
 #endif
 #include "webrtc/sdk/media_constraints.h"
 #include "webrtc/rtc_base/bind.h"
+#include "webrtc/p2p/base/basic_packet_socket_factory.h"
+#include "webrtc/p2p/client/basic_port_allocator.h"
+#include "webrtc/rtc_base/network.h"
 namespace owt {
 namespace base {
 using webrtc::MediaStreamInterface;
@@ -86,6 +89,11 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   std::unique_ptr<rtc::Thread> worker_thread;
   std::unique_ptr<rtc::Thread> signaling_thread;
   std::unique_ptr<rtc::Thread> network_thread;
+  // Created on the network thread when an ICE network ignore list is
+  // configured; used to build a PortAllocator whose enumeration skips
+  // those interfaces. Null when the feature is off.
+  std::unique_ptr<rtc::BasicNetworkManager> ice_network_manager_;
+  std::unique_ptr<rtc::BasicPacketSocketFactory> ice_socket_factory_;
 #if defined(WEBRTC_WIN)
   bool render_hardware_acceleration_enabled_;  // Enabling HW acceleration for
                                                // VP8, H.264 & HEVC enc/dec
