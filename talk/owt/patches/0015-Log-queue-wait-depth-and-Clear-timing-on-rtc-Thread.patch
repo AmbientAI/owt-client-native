@@ -1,4 +1,4 @@
-From af79bebcadbd8f9120bb8d0de51ad7064772bdf8 Mon Sep 17 00:00:00 2001
+From b570857d2e0d200eb55c3d1f5584ddc94db184ab Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -8,13 +8,12 @@ message waited in the queue before it ran, how deep the queue was when it was po
 and how long Clear held the queue lock. Also fixes that line naming thread.cc as the
 origin of every Send and Invoke instead of the real caller.
 ---
- rtc_base/thread.cc        | 54 +++++++++++++++++++++++++++++++++------
- rtc_base/thread.h         |  3 +++
+ rtc_base/thread.cc        | 58 +++++++++++++++++++++++++++++++--------
  rtc_base/thread_message.h |  4 ++-
- 3 files changed, 52 insertions(+), 9 deletions(-)
+ 2 files changed, 49 insertions(+), 13 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..d20060a622 100644
+index a8cb022fa9..7fdd17e8ec 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
 @@ -529,6 +529,7 @@ void Thread::Post(const Location& posted_from,
@@ -69,41 +68,31 @@ index a8cb022fa9..d20060a622 100644
    }
  }
  
-@@ -883,13 +899,15 @@ void Thread::Send(const Location& posted_from,
+@@ -883,13 +899,16 @@ void Thread::Send(const Location& posted_from,
                                                             this);
  #endif
    bool ready = false;
 -  PostTask(
-+  // PostTaskFrom, so a blocking Invoke reports its own call site, not thread.cc.
-+  PostTaskFrom(
-       webrtc::ToQueuedTask([msg]() mutable { msg.phandler->OnMessage(&msg); },
-                            [this, &ready, current_thread] {
-                              CritScope cs(&crit_);
-                              ready = true;
-                              current_thread->socketserver()->WakeUp();
+-      webrtc::ToQueuedTask([msg]() mutable { msg.phandler->OnMessage(&msg); },
+-                           [this, &ready, current_thread] {
+-                             CritScope cs(&crit_);
+-                             ready = true;
+-                             current_thread->socketserver()->WakeUp();
 -                           }));
-+                           }),
-+      posted_from);
++  // Posted here rather than via PostTask, which stamps its own RTC_FROM_HERE and would
++  // make every blocking Invoke report thread.cc as its origin.
++  Post(posted_from, &queued_task_handler_, /*id=*/0,
++       new ScopedMessageData<webrtc::QueuedTask>(webrtc::ToQueuedTask(
++           [msg]() mutable { msg.phandler->OnMessage(&msg); },
++           [this, &ready, current_thread] {
++             CritScope cs(&crit_);
++             ready = true;
++             current_thread->socketserver()->WakeUp();
++           })));
  
    bool waited = false;
    crit_.Enter();
-@@ -950,9 +968,14 @@ void Thread::QueuedTaskHandler::OnMessage(Message* msg) {
- }
- 
- void Thread::PostTask(std::unique_ptr<webrtc::QueuedTask> task) {
-+  PostTaskFrom(std::move(task), RTC_FROM_HERE);
-+}
-+
-+void Thread::PostTaskFrom(std::unique_ptr<webrtc::QueuedTask> task,
-+                          const Location& posted_from) {
-   // Though Post takes MessageData by raw pointer (last parameter), it still
-   // takes it with ownership.
--  Post(RTC_FROM_HERE, &queued_task_handler_,
-+  Post(posted_from, &queued_task_handler_,
-        /*id=*/0, new ScopedMessageData<webrtc::QueuedTask>(std::move(task)));
- }
- 
-@@ -977,8 +1000,23 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -977,8 +996,23 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
@@ -129,20 +118,6 @@ index a8cb022fa9..d20060a622 100644
  }
  
  bool Thread::ProcessMessages(int cmsLoop) {
-diff --git a/rtc_base/thread.h b/rtc_base/thread.h
-index 74aab623c8..8d0679507f 100644
---- a/rtc_base/thread.h
-+++ b/rtc_base/thread.h
-@@ -390,6 +390,9 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
- 
-   // From TaskQueueBase
-   void PostTask(std::unique_ptr<webrtc::QueuedTask> task) override;
-+  // As PostTask, but keeps the caller location instead of stamping thread.cc.
-+  void PostTaskFrom(std::unique_ptr<webrtc::QueuedTask> task,
-+                    const Location& posted_from);
-   void PostDelayedTask(std::unique_ptr<webrtc::QueuedTask> task,
-                        uint32_t milliseconds) override;
-   void Delete() override;
 diff --git a/rtc_base/thread_message.h b/rtc_base/thread_message.h
 index 80824e29e5..404b96e395 100644
 --- a/rtc_base/thread_message.h
