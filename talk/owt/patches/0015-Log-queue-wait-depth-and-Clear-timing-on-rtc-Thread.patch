@@ -1,17 +1,12 @@
-From 02496470ef80e754c6d4ad38951d28f8f3e6d273 Mon Sep 17 00:00:00 2001
+From be03e1e22c889a41332b989d082a5f194bc392bd Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
 
-libwebrtc times only OnMessage(), so a message delayed in the queue, behind a backlog,
-or by Clear holding the queue lock is indistinguishable from a slow handler.
-
-Message carries when it was queued and Dispatch subtracts it; Post reports queue depth
-at powers of two; Clear reports its lock wait and hold. PostTaskFrom keeps the caller
-location, which PostTask otherwise overwrites with thread.cc on every Send and Invoke.
-
-All at LS_INFO. The post-path clock read is gated on INFO; Clear is a cold path.
-Completion-based: a dispatch that never returns still logs nothing.
+Adds three logs beside the existing "Message took Nms to dispatch" line: how long the
+message waited in the queue before it ran, how deep the queue was when it was posted,
+and how long Clear held the queue lock. Also fixes that line naming thread.cc as the
+origin of every Send and Invoke instead of the real caller.
 ---
  rtc_base/thread.cc        | 60 +++++++++++++++++++++++++++++++++------
  rtc_base/thread.h         |  3 ++
