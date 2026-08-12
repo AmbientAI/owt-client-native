@@ -1,4 +1,4 @@
-From 6201dc772a73977144e639f27586d982e5021c1c Mon Sep 17 00:00:00 2001
+From 83238d79431b933b6a6fdff64e26cd2c704f5938 Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -8,13 +8,19 @@ message can be delayed is invisible and indistinguishable from a slow handler.
 
 Message now carries when it was queued, and Dispatch subtracts it, so a slow message is
 split into time spent waiting and time spent running. Post reports queue depth, which
-separates one slow handler from a backlog behind it. Clear reports how long it waited
-for the queue lock and how long it held it while scanning, because that stalls the
-thread without any dispatch running at all.
+separates one slow handler from a backlog in front of it. Clear reports how long it
+waited for the queue lock and how long it held it while scanning, because that stalls
+the thread without any dispatch running at all.
+
+PostTask stamped its own RTC_FROM_HERE, so every task it queued -- which is every
+blocking Send and therefore every Invoke -- reported thread.cc as its origin. PostTaskFrom
+keeps the calling location, so the slow-dispatch line names the real call site on the
+paths that matter most.
 
 Depth is reported only at powers of two: the naive form logs once per post for as long
-as the queue stays deep, which measured 400k lines for 400k posts. Clear skips empty
-scans, which thread teardown produces constantly.
+as the queue stays deep, measured at 400k lines for 400k posts. Clear skips empty scans
+and logs after releasing the lock, since formatting a log while holding it would extend
+the hold time being reported.
 
 All at LS_INFO, beside the existing line. The clock read in the post path is gated on
 INFO being enabled, so a default build pays a severity check. Clear is a cold path and
@@ -22,12 +28,13 @@ is not gated.
 
 Still completion-based: a dispatch that never returns logs nothing here.
 ---
- rtc_base/thread.cc        | 53 ++++++++++++++++++++++++++++++++++++---
- rtc_base/thread_message.h |  6 ++++-
- 2 files changed, 55 insertions(+), 4 deletions(-)
+ rtc_base/thread.cc        | 77 +++++++++++++++++++++++++++++++++++----
+ rtc_base/thread.h         |  5 +++
+ rtc_base/thread_message.h |  6 ++-
+ 3 files changed, 79 insertions(+), 9 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..741e150921 100644
+index a8cb022fa9..754f33453b 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
 @@ -69,6 +69,14 @@ namespace rtc {
@@ -102,30 +109,66 @@ index a8cb022fa9..741e150921 100644
    }
  }
  
-@@ -868,6 +898,9 @@ void Thread::Send(const Location& posted_from,
-   msg.phandler = phandler;
-   msg.message_id = id;
-   msg.pdata = pdata;
-+  if (RTC_LOG_CHECK_LEVEL(LS_INFO)) {
-+    msg.posted_ms = TimeMillis();
-+  }
-   if (IsCurrent()) {
-     msg.phandler->OnMessage(&msg);
-     return;
-@@ -977,8 +1010,22 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -883,13 +913,18 @@ void Thread::Send(const Location& posted_from,
+                                                            this);
+ #endif
+   bool ready = false;
+-  PostTask(
++  // PostTaskFrom, not PostTask: this is the path every blocking Invoke takes, and it is
++  // the one whose call site matters. The Message queued here is the QueuedTask wrapper,
++  // so its posted_ms is stamped by Post and measures the real queue wait; the msg copied
++  // into the lambda below is never the one Dispatch sees.
++  PostTaskFrom(
+       webrtc::ToQueuedTask([msg]() mutable { msg.phandler->OnMessage(&msg); },
+                            [this, &ready, current_thread] {
+                              CritScope cs(&crit_);
+                              ready = true;
+                              current_thread->socketserver()->WakeUp();
+-                           }));
++                           }),
++      posted_from);
+ 
+   bool waited = false;
+   crit_.Enter();
+@@ -950,9 +985,14 @@ void Thread::QueuedTaskHandler::OnMessage(Message* msg) {
+ }
+ 
+ void Thread::PostTask(std::unique_ptr<webrtc::QueuedTask> task) {
++  PostTaskFrom(std::move(task), RTC_FROM_HERE);
++}
++
++void Thread::PostTaskFrom(std::unique_ptr<webrtc::QueuedTask> task,
++                          const Location& posted_from) {
+   // Though Post takes MessageData by raw pointer (last parameter), it still
+   // takes it with ownership.
+-  Post(RTC_FROM_HERE, &queued_task_handler_,
++  Post(posted_from, &queued_task_handler_,
+        /*id=*/0, new ScopedMessageData<webrtc::QueuedTask>(std::move(task)));
+ }
+ 
+@@ -977,8 +1017,29 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
+-  CritScope cs(&crit_);
+-  ClearInternal(phandler, id, removed);
 +  // Timed on both sides. Waiting for the lock means somebody else is holding the queue;
 +  // holding it long means this scan is what stalls everyone else. Neither shows up as a
 +  // slow dispatch, because no dispatch is running. Cold path, so the clock reads are
 +  // not worth gating.
 +  const int64_t before_lock = TimeMillis();
-   CritScope cs(&crit_);
-+  const int64_t acquired = TimeMillis();
-+  const size_t scanned = messages_.size() + delayed_messages_.size();
-   ClearInternal(phandler, id, removed);
-+  const int64_t done = TimeMillis();
++  int64_t acquired = 0;
++  int64_t done = 0;
++  size_t scanned = 0;
++  {
++    CritScope cs(&crit_);
++    acquired = TimeMillis();
++    scanned = messages_.size() + delayed_messages_.size();
++    ClearInternal(phandler, id, removed);
++    done = TimeMillis();
++  }
++  // Logged after the lock is released. RTC_LOG formats and takes the sink lock, so doing
++  // it inside would extend the very hold time this is here to report.
 +  if (scanned > 0 && TimeDiff(done, before_lock) >= kSlowClearLoggingThreshold) {
 +    RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
 +                     << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
@@ -135,6 +178,22 @@ index a8cb022fa9..741e150921 100644
  }
  
  bool Thread::ProcessMessages(int cmsLoop) {
+diff --git a/rtc_base/thread.h b/rtc_base/thread.h
+index 74aab623c8..6e19aef4d8 100644
+--- a/rtc_base/thread.h
++++ b/rtc_base/thread.h
+@@ -390,6 +390,11 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+ 
+   // From TaskQueueBase
+   void PostTask(std::unique_ptr<webrtc::QueuedTask> task) override;
++  // Same, but keeps the calling location instead of stamping PostTask's own. Without it
++  // every task -- including every blocking Send/Invoke, which go through PostTask --
++  // reports thread.cc as its origin, so the slow-dispatch log cannot name the call site.
++  void PostTaskFrom(std::unique_ptr<webrtc::QueuedTask> task,
++                    const Location& posted_from);
+   void PostDelayedTask(std::unique_ptr<webrtc::QueuedTask> task,
+                        uint32_t milliseconds) override;
+   void Delete() override;
 diff --git a/rtc_base/thread_message.h b/rtc_base/thread_message.h
 index 80824e29e5..3d9611d091 100644
 --- a/rtc_base/thread_message.h
