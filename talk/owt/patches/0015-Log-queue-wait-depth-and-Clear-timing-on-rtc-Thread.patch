@@ -1,4 +1,4 @@
-From 377ad4657b4bbec8b6d3f40fa141ad2ee19e0fb5 Mon Sep 17 00:00:00 2001
+From 6201dc772a73977144e639f27586d982e5021c1c Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -6,11 +6,15 @@ Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
 The slow-dispatch line reports only how long OnMessage() ran, so every other way a
 message can be delayed is invisible and indistinguishable from a slow handler.
 
-Message now carries when it was queued, and Dispatch subtracts it, so a slow message
-is split into time spent waiting and time spent running. Post reports queue depth,
-which separates one slow handler from fifty messages backed up behind it. Clear reports
-how long it waited for the queue lock and how long it held it while scanning, because
-that stalls the thread without any dispatch running at all.
+Message now carries when it was queued, and Dispatch subtracts it, so a slow message is
+split into time spent waiting and time spent running. Post reports queue depth, which
+separates one slow handler from a backlog behind it. Clear reports how long it waited
+for the queue lock and how long it held it while scanning, because that stalls the
+thread without any dispatch running at all.
+
+Depth is reported only at powers of two: the naive form logs once per post for as long
+as the queue stays deep, which measured 400k lines for 400k posts. Clear skips empty
+scans, which thread teardown produces constantly.
 
 All at LS_INFO, beside the existing line. The clock read in the post path is gated on
 INFO being enabled, so a default build pays a severity check. Clear is a cold path and
@@ -18,15 +22,15 @@ is not gated.
 
 Still completion-based: a dispatch that never returns logs nothing here.
 ---
- rtc_base/thread.cc        | 48 ++++++++++++++++++++++++++++++++++++---
+ rtc_base/thread.cc        | 53 ++++++++++++++++++++++++++++++++++++---
  rtc_base/thread_message.h |  6 ++++-
- 2 files changed, 50 insertions(+), 4 deletions(-)
+ 2 files changed, 55 insertions(+), 4 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..2846e4fc88 100644
+index a8cb022fa9..741e150921 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
-@@ -69,6 +69,12 @@ namespace rtc {
+@@ -69,6 +69,14 @@ namespace rtc {
  namespace {
  
  const int kSlowDispatchLoggingThreshold = 50;  // 50 ms
@@ -35,11 +39,13 @@ index a8cb022fa9..2846e4fc88 100644
 +const size_t kDeepQueueLoggingThreshold = 16;
 +// Clear() scans messages_ and delayed_messages_ linearly while holding the same lock
 +// Get() and Post() need, so a long one stalls the thread without any dispatch running.
-+const int kSlowClearLoggingThreshold = 20;  // 20 ms
++// Measured at roughly 40ns per message (400k scanned in 10ms), so this bar is about
++// 125k queued messages. Anything reaching it is already pathological.
++const int kSlowClearLoggingThreshold = 5;  // 5 ms
  
  class MessageHandlerWithTask final : public MessageHandler {
   public:
-@@ -529,6 +535,7 @@ void Thread::Post(const Location& posted_from,
+@@ -529,6 +537,7 @@ void Thread::Post(const Location& posted_from,
    // Add the message to the end of the queue
    // Signal for the multiplexer to return
  
@@ -47,7 +53,7 @@ index a8cb022fa9..2846e4fc88 100644
    {
      CritScope cs(&crit_);
      Message msg;
-@@ -536,7 +543,16 @@ void Thread::Post(const Location& posted_from,
+@@ -536,7 +545,19 @@ void Thread::Post(const Location& posted_from,
      msg.phandler = phandler;
      msg.message_id = id;
      msg.pdata = pdata;
@@ -58,13 +64,16 @@ index a8cb022fa9..2846e4fc88 100644
      messages_.push_back(msg);
 +    depth = messages_.size();   // free here; reading it later would retake the lock
 +  }
-+  if (depth >= kDeepQueueLoggingThreshold) {
++  // Only at powers of two. The naive form logs once per post for as long as the queue
++  // stays deep, which on a real backlog is one line per message; doubling reports the
++  // escalation in a handful of lines instead.
++  if (depth >= kDeepQueueLoggingThreshold && (depth & (depth - 1)) == 0) {
 +    RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
 +                     << " after posting from: " << posted_from.ToString();
    }
    WakeUpSocketServer();
  }
-@@ -577,6 +593,11 @@ void Thread::DoDelayPost(const Location& posted_from,
+@@ -577,6 +598,11 @@ void Thread::DoDelayPost(const Location& posted_from,
    {
      CritScope cs(&crit_);
      Message msg;
@@ -76,7 +85,7 @@ index a8cb022fa9..2846e4fc88 100644
      msg.posted_from = posted_from;
      msg.phandler = phandler;
      msg.message_id = id;
-@@ -665,9 +686,13 @@ void Thread::Dispatch(Message* pmsg) {
+@@ -665,9 +691,13 @@ void Thread::Dispatch(Message* pmsg) {
    int64_t end_time = TimeMillis();
    int64_t diff = TimeDiff(end_time, start_time);
    if (diff >= kSlowDispatchLoggingThreshold) {
@@ -93,7 +102,7 @@ index a8cb022fa9..2846e4fc88 100644
    }
  }
  
-@@ -868,6 +893,9 @@ void Thread::Send(const Location& posted_from,
+@@ -868,6 +898,9 @@ void Thread::Send(const Location& posted_from,
    msg.phandler = phandler;
    msg.message_id = id;
    msg.pdata = pdata;
@@ -103,7 +112,7 @@ index a8cb022fa9..2846e4fc88 100644
    if (IsCurrent()) {
      msg.phandler->OnMessage(&msg);
      return;
-@@ -977,8 +1005,22 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -977,8 +1010,22 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
@@ -117,7 +126,7 @@ index a8cb022fa9..2846e4fc88 100644
 +  const size_t scanned = messages_.size() + delayed_messages_.size();
    ClearInternal(phandler, id, removed);
 +  const int64_t done = TimeMillis();
-+  if (TimeDiff(done, before_lock) >= kSlowClearLoggingThreshold) {
++  if (scanned > 0 && TimeDiff(done, before_lock) >= kSlowClearLoggingThreshold) {
 +    RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
 +                     << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
 +                     << "held it " << TimeDiff(done, acquired) << "ms scanning "
