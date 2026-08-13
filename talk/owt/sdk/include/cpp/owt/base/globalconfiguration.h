@@ -105,6 +105,27 @@ class GlobalConfiguration {
     return network_thread_realtime_enabled_;
   }
   /**
+   @brief Enable/disable GATHER_ONCE for P2P ICE candidate gathering.
+   @details Enabled by default. Under GATHER_CONTINUALLY the allocator
+   re-gathers on any interface that has no working connection and never
+   reclaims those ports, leaking a UDP socket per round until the socket-leak
+   watchdog kills the process. GATHER_ONCE is correct for a fixed-network
+   publisher that never roams. Disabling this restores GATHER_CONTINUALLY per
+   node — a kill-switch for a node that genuinely needs in-place re-gathering,
+   without a binary rollback.
+   @param enabled Whether ICE gathering should stop after the first round.
+   */
+  static void SetIceGatherOnceEnabled(bool enabled) {
+    ice_gather_once_enabled_ = enabled;
+  }
+  /**
+   @brief This function gets whether GATHER_ONCE is enabled for P2P ICE.
+   @return true or false.
+   */
+  static bool GetIceGatherOnceEnabled() {
+    return ice_gather_once_enabled_;
+  }
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -279,6 +300,7 @@ class GlobalConfiguration {
    * Default is false. If true, network_thread is promoted to SCHED_RR.
    */
   static bool network_thread_realtime_enabled_;
+  static bool ice_gather_once_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not

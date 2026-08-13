@@ -12,6 +12,7 @@
 #include "webrtc/rtc_base/task_queue.h"
 #include "talk/owt/sdk/base/eventtrigger.h"
 #include "talk/owt/sdk/base/stringutils.h"
+#include "talk/owt/sdk/include/cpp/owt/base/globalconfiguration.h"
 #include "talk/owt/sdk/include/cpp/owt/base/stream.h"
 #include "talk/owt/sdk/include/cpp/owt/p2p/p2pclient.h"
 #include "talk/owt/sdk/p2p/p2ppeerconnectionchannel.h"
@@ -388,11 +389,17 @@ PeerConnectionChannelConfiguration P2PClient::GetPeerConnectionChannelConfigurat
   // }
   // TODO(jianlin): For publisher, peerconnection is created before UA info is received.
   // so signaling protocol change is needed if we would like to remove this HC.
-  // AMBIENT: HC kept, flipped to GATHER_ONCE. Continual gathering never completes, so
-  // the allocator re-gathers every 5 min and retains ~4 UDP sockets/peer/round (10k+ in
-  // 40h, killed by the socket-leak watchdog). Local-only; the appliance never roams.
+  // AMBIENT: HC kept, but the value is now flag-driven. Under GATHER_CONTINUALLY
+  // the allocator re-gathers on any interface with no working connection and
+  // never reclaims those ports — one leaked UDP socket per round (10k+ in 40h,
+  // killed by the socket-leak watchdog). GATHER_ONCE by default: this is a
+  // fixed-network publisher and never roams. The node-config kill-switch
+  // (bridged from NodeConfig in main.cc) restores the old behaviour without a
+  // binary rollback. Local-only setting; not signalled to the peer.
   config.continual_gathering_policy =
-      PeerConnectionInterface::ContinualGatheringPolicy::GATHER_ONCE;
+      owt::base::GlobalConfiguration::GetIceGatherOnceEnabled()
+          ? PeerConnectionInterface::ContinualGatheringPolicy::GATHER_ONCE
+          : PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY;
 
   // See webrtc/api/peer_connection_interface.h for details on the options
   // https://tools.ietf.org/html/draft-ietf-rtcweb-jsep-24#section-4.1.1
