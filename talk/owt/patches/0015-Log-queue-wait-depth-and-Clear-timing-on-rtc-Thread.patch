@@ -1,4 +1,4 @@
-From b570857d2e0d200eb55c3d1f5584ddc94db184ab Mon Sep 17 00:00:00 2001
+From b8ccac5fc39964afb4a02d50139cde16352bcce6 Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -8,12 +8,12 @@ message waited in the queue before it ran, how deep the queue was when it was po
 and how long Clear held the queue lock. Also fixes that line naming thread.cc as the
 origin of every Send and Invoke instead of the real caller.
 ---
- rtc_base/thread.cc        | 58 +++++++++++++++++++++++++++++++--------
+ rtc_base/thread.cc        | 63 +++++++++++++++++++++++++++++++--------
  rtc_base/thread_message.h |  4 ++-
- 2 files changed, 49 insertions(+), 13 deletions(-)
+ 2 files changed, 53 insertions(+), 14 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..7fdd17e8ec 100644
+index a8cb022fa9..3d36726062 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
 @@ -529,6 +529,7 @@ void Thread::Post(const Location& posted_from,
@@ -52,23 +52,28 @@ index a8cb022fa9..7fdd17e8ec 100644
      msg.posted_from = posted_from;
      msg.phandler = phandler;
      msg.message_id = id;
-@@ -665,9 +678,12 @@ void Thread::Dispatch(Message* pmsg) {
+@@ -664,10 +677,16 @@ void Thread::Dispatch(Message* pmsg) {
+   pmsg->phandler->OnMessage(pmsg);
    int64_t end_time = TimeMillis();
    int64_t diff = TimeDiff(end_time, start_time);
-   if (diff >= kSlowDispatchLoggingThreshold) {
+-  if (diff >= kSlowDispatchLoggingThreshold) {
 -    RTC_LOG(LS_INFO) << "Message took " << diff
 -                     << "ms to dispatch. Posted from: "
 -                     << pmsg->posted_from.ToString();
-+    // -1, not 0, so an unstamped message is not reported as an instant one.
-+    const int64_t queued_ms =
-+        pmsg->posted_ms != 0 ? TimeDiff(start_time, pmsg->posted_ms) : -1;
++  // -1, not 0, so an unstamped message is not reported as an instant one.
++  const int64_t queued_ms =
++      pmsg->posted_ms != 0 ? TimeDiff(start_time, pmsg->posted_ms) : -1;
++  // Either side crossing the bar is worth a line. Gating on dispatch alone hides the
++  // case this exists for: a message that waits a long time and then runs in microseconds.
++  if (diff >= kSlowDispatchLoggingThreshold ||
++      queued_ms >= kSlowDispatchLoggingThreshold) {
 +    RTC_LOG(LS_INFO) << "Message took " << diff << "ms to dispatch, after "
 +                     << queued_ms << "ms queued on thread " << name_
 +                     << ". Posted from: " << pmsg->posted_from.ToString();
    }
  }
  
-@@ -883,13 +899,16 @@ void Thread::Send(const Location& posted_from,
+@@ -883,13 +902,16 @@ void Thread::Send(const Location& posted_from,
                                                             this);
  #endif
    bool ready = false;
@@ -92,7 +97,7 @@ index a8cb022fa9..7fdd17e8ec 100644
  
    bool waited = false;
    crit_.Enter();
-@@ -977,8 +996,23 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -977,8 +999,23 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
