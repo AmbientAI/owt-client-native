@@ -1,4 +1,4 @@
-From b8ccac5fc39964afb4a02d50139cde16352bcce6 Mon Sep 17 00:00:00 2001
+From dedadbcd1fd701e0d57a654c10f375a55ec951c6 Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -8,15 +8,37 @@ message waited in the queue before it ran, how deep the queue was when it was po
 and how long Clear held the queue lock. Also fixes that line naming thread.cc as the
 origin of every Send and Invoke instead of the real caller.
 ---
- rtc_base/thread.cc        | 63 +++++++++++++++++++++++++++++++--------
- rtc_base/thread_message.h |  4 ++-
- 2 files changed, 53 insertions(+), 14 deletions(-)
+ rtc_base/thread.cc        | 93 +++++++++++++++++++++++++++++++++------
+ rtc_base/thread_message.h |  4 +-
+ 2 files changed, 83 insertions(+), 14 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..3d36726062 100644
+index a8cb022fa9..efd2af551e 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
-@@ -529,6 +529,7 @@ void Thread::Post(const Location& posted_from,
+@@ -10,6 +10,8 @@
+ 
+ #include "rtc_base/thread.h"
+ 
++#include <cstdlib>
++
+ #if defined(WEBRTC_WIN)
+ #include <comdef.h>
+ #elif defined(WEBRTC_POSIX)
+@@ -69,6 +71,12 @@ namespace rtc {
+ namespace {
+ 
+ const int kSlowDispatchLoggingThreshold = 50;  // 50 ms
++// Measured on a live node: unguarded, Clear produced 2.7M lines in 2h (94% of all
++// output) because it runs on every rtc::Thread whenever a MessageHandler is destroyed
++// and almost always scans nothing. Depth added another 165k, one per Post.
++const size_t kDeepQueueLoggingThreshold = 16;
++// Clear scans both queues under the lock Get and Post need. ~40ns/message measured.
++const int kSlowClearLoggingThreshold = 5;  // 5 ms
+ 
+ class MessageHandlerWithTask final : public MessageHandler {
+  public:
+@@ -529,6 +537,7 @@ void Thread::Post(const Location& posted_from,
    // Add the message to the end of the queue
    // Signal for the multiplexer to return
  
@@ -24,7 +46,7 @@ index a8cb022fa9..3d36726062 100644
    {
      CritScope cs(&crit_);
      Message msg;
-@@ -536,8 +537,16 @@ void Thread::Post(const Location& posted_from,
+@@ -536,7 +545,17 @@ void Thread::Post(const Location& posted_from,
      msg.phandler = phandler;
      msg.message_id = id;
      msg.pdata = pdata;
@@ -33,15 +55,16 @@ index a8cb022fa9..3d36726062 100644
 +    }
      messages_.push_back(msg);
 +    depth = messages_.size();   // free here; reading it later would retake the lock
++  }
++  // Normal depth is 1-3, so this stays silent until a queue actually backs up. Logging
++  // every post measured 165k lines in 2h on an idle node.
++  if (depth >= kDeepQueueLoggingThreshold) {
++    RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
++                     << " after posting from: " << posted_from.ToString();
    }
-+  // Every post, so the count of posts per caller is itself the measurement. Only runs
-+  // at INFO, on a node opted in for an investigation.
-+  RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
-+                   << " after posting from: " << posted_from.ToString();
    WakeUpSocketServer();
  }
- 
-@@ -577,6 +586,10 @@ void Thread::DoDelayPost(const Location& posted_from,
+@@ -577,6 +596,10 @@ void Thread::DoDelayPost(const Location& posted_from,
    {
      CritScope cs(&crit_);
      Message msg;
@@ -52,7 +75,31 @@ index a8cb022fa9..3d36726062 100644
      msg.posted_from = posted_from;
      msg.phandler = phandler;
      msg.message_id = id;
-@@ -664,10 +677,16 @@ void Thread::Dispatch(Message* pmsg) {
+@@ -656,18 +679,40 @@ void Thread::ClearInternal(MessageHandler* phandler,
+   delayed_messages_.reheap();
+ }
+ 
++// REPRO ONLY -- not for production. AMBIENT_REPRO_SIGNALING_DELAY_MS>0 slows every
++// dispatch on signaling_thread, so a handful of streams builds the queue that a busy
++// production node builds with hundreds. Capped at 500ms; unset or 0 disables it.
++static int ReproSignalingDelayMs() {
++  static const int ms = []() {
++    const char* v = getenv("AMBIENT_REPRO_SIGNALING_DELAY_MS");
++    if (!v) return 0;
++    int n = atoi(v);
++    return n < 0 ? 0 : (n > 500 ? 500 : n);
++  }();
++  return ms;
++}
++
+ void Thread::Dispatch(Message* pmsg) {
+   TRACE_EVENT2("webrtc", "Thread::Dispatch", "src_file",
+                pmsg->posted_from.file_name(), "src_func",
+                pmsg->posted_from.function_name());
++  if (ReproSignalingDelayMs() > 0 && name_ == "signaling_thread") {
++    Thread::SleepMs(ReproSignalingDelayMs());
++  }
+   int64_t start_time = TimeMillis();
    pmsg->phandler->OnMessage(pmsg);
    int64_t end_time = TimeMillis();
    int64_t diff = TimeDiff(end_time, start_time);
@@ -73,7 +120,7 @@ index a8cb022fa9..3d36726062 100644
    }
  }
  
-@@ -883,13 +902,16 @@ void Thread::Send(const Location& posted_from,
+@@ -883,13 +928,16 @@ void Thread::Send(const Location& posted_from,
                                                             this);
  #endif
    bool ready = false;
@@ -97,7 +144,7 @@ index a8cb022fa9..3d36726062 100644
  
    bool waited = false;
    crit_.Enter();
-@@ -977,8 +999,23 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -977,8 +1025,27 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
@@ -115,11 +162,15 @@ index a8cb022fa9..3d36726062 100644
 +    ClearInternal(phandler, id, removed);
 +    done = TimeMillis();
 +  }
-+  // Logged after release: RTC_LOG would extend the hold it is reporting.
-+  RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
-+                   << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
-+                   << "held it " << TimeDiff(done, acquired) << "ms scanning "
-+                   << scanned << " messages.";
++  // Logged after release: RTC_LOG would extend the hold it is reporting. Skipping empty
++  // and fast scans is what keeps this from swamping the log -- teardown calls Clear on
++  // every thread in the process, and nearly all of those scan nothing.
++  if (scanned > 0 && TimeDiff(done, before_lock) >= kSlowClearLoggingThreshold) {
++    RTC_LOG(LS_INFO) << "Clear on thread " << name_ << " waited "
++                     << TimeDiff(acquired, before_lock) << "ms for the queue lock, then "
++                     << "held it " << TimeDiff(done, acquired) << "ms scanning "
++                     << scanned << " messages.";
++  }
  }
  
  bool Thread::ProcessMessages(int cmsLoop) {
