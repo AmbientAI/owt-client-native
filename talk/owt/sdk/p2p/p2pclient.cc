@@ -389,13 +389,9 @@ PeerConnectionChannelConfiguration P2PClient::GetPeerConnectionChannelConfigurat
   // }
   // TODO(jianlin): For publisher, peerconnection is created before UA info is received.
   // so signaling protocol change is needed if we would like to remove this HC.
-  // AMBIENT: HC kept, but the value is now flag-driven. Under GATHER_CONTINUALLY
-  // the allocator re-gathers on any interface with no working connection and
-  // never reclaims those ports — one leaked UDP socket per round (10k+ in 40h,
-  // killed by the socket-leak watchdog). GATHER_ONCE by default: this is a
-  // fixed-network publisher and never roams. The node-config kill-switch
-  // (bridged from NodeConfig in main.cc) restores the old behaviour without a
-  // binary rollback. Local-only setting; not signalled to the peer.
+  // AMBIENT: HC kept, value now flag-driven. GATHER_CONTINUALLY re-gathers on
+  // interfaces that never connect and never reclaims those ports - one leaked
+  // UDP socket per round. Local-only; not signalled to the peer.
   config.continual_gathering_policy =
       owt::base::GlobalConfiguration::GetIceGatherOnceEnabled()
           ? PeerConnectionInterface::ContinualGatheringPolicy::GATHER_ONCE

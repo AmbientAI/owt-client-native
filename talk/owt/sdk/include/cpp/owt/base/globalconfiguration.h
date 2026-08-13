@@ -105,21 +105,16 @@ class GlobalConfiguration {
     return network_thread_realtime_enabled_;
   }
   /**
-   @brief Enable/disable GATHER_ONCE for P2P ICE candidate gathering.
-   @details Enabled by default. Under GATHER_CONTINUALLY the allocator
-   re-gathers on any interface that has no working connection and never
-   reclaims those ports, leaking a UDP socket per round until the socket-leak
-   watchdog kills the process. GATHER_ONCE is correct for a fixed-network
-   publisher that never roams. Disabling this restores GATHER_CONTINUALLY per
-   node — a kill-switch for a node that genuinely needs in-place re-gathering,
-   without a binary rollback.
+   @brief Enable/disable GATHER_ONCE for P2P ICE gathering. Enabled by default;
+   disabling restores GATHER_CONTINUALLY, which leaks a UDP socket per re-gather
+   round on interfaces that never form a working connection.
    @param enabled Whether ICE gathering should stop after the first round.
    */
   static void SetIceGatherOnceEnabled(bool enabled) {
     ice_gather_once_enabled_ = enabled;
   }
   /**
-   @brief This function gets whether GATHER_ONCE is enabled for P2P ICE.
+   @brief Gets whether GATHER_ONCE is enabled for P2P ICE.
    @return true or false.
    */
   static bool GetIceGatherOnceEnabled() {
