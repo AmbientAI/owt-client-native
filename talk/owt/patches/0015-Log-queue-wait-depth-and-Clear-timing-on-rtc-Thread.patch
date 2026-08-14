@@ -1,4 +1,4 @@
-From dedadbcd1fd701e0d57a654c10f375a55ec951c6 Mon Sep 17 00:00:00 2001
+From f610372b5e9b7a92a486fbafb698dece4be804bf Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
 Date: Wed, 12 Aug 2026 13:59:41 +0000
 Subject: [PATCH] Log queue wait, queue depth and Clear timing on rtc::Thread
@@ -8,12 +8,13 @@ message waited in the queue before it ran, how deep the queue was when it was po
 and how long Clear held the queue lock. Also fixes that line naming thread.cc as the
 origin of every Send and Invoke instead of the real caller.
 ---
- rtc_base/thread.cc        | 93 +++++++++++++++++++++++++++++++++------
- rtc_base/thread_message.h |  4 +-
- 2 files changed, 83 insertions(+), 14 deletions(-)
+ rtc_base/thread.cc        | 106 +++++++++++++++++++++++++++++++++-----
+ rtc_base/thread.h         |   3 ++
+ rtc_base/thread_message.h |   4 +-
+ 3 files changed, 99 insertions(+), 14 deletions(-)
 
 diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
-index a8cb022fa9..efd2af551e 100644
+index a8cb022fa9..f5c4e7aa21 100644
 --- a/rtc_base/thread.cc
 +++ b/rtc_base/thread.cc
 @@ -10,6 +10,8 @@
@@ -25,20 +26,26 @@ index a8cb022fa9..efd2af551e 100644
  #if defined(WEBRTC_WIN)
  #include <comdef.h>
  #elif defined(WEBRTC_POSIX)
-@@ -69,6 +71,12 @@ namespace rtc {
+@@ -69,6 +71,18 @@ namespace rtc {
  namespace {
  
  const int kSlowDispatchLoggingThreshold = 50;  // 50 ms
 +// Measured on a live node: unguarded, Clear produced 2.7M lines in 2h (94% of all
 +// output) because it runs on every rtc::Thread whenever a MessageHandler is destroyed
 +// and almost always scans nothing. Depth added another 165k, one per Post.
++//
++// Output has to be bounded rather than proportional to load: a queue seen 13,696 deep
++// would otherwise emit 13,696 depth lines and as many queue-wait lines. Depth reports
++// at powers of two, and the queue-wait line is rate limited.
 +const size_t kDeepQueueLoggingThreshold = 16;
 +// Clear scans both queues under the lock Get and Post need. ~40ns/message measured.
 +const int kSlowClearLoggingThreshold = 5;  // 5 ms
++// At most one queue-wait line per thread per interval, however many messages are waiting.
++const int kQueueWaitLogIntervalMs = 1000;
  
  class MessageHandlerWithTask final : public MessageHandler {
   public:
-@@ -529,6 +537,7 @@ void Thread::Post(const Location& posted_from,
+@@ -529,6 +543,7 @@ void Thread::Post(const Location& posted_from,
    // Add the message to the end of the queue
    // Signal for the multiplexer to return
  
@@ -46,7 +53,7 @@ index a8cb022fa9..efd2af551e 100644
    {
      CritScope cs(&crit_);
      Message msg;
-@@ -536,7 +545,17 @@ void Thread::Post(const Location& posted_from,
+@@ -536,7 +551,17 @@ void Thread::Post(const Location& posted_from,
      msg.phandler = phandler;
      msg.message_id = id;
      msg.pdata = pdata;
@@ -56,15 +63,15 @@ index a8cb022fa9..efd2af551e 100644
      messages_.push_back(msg);
 +    depth = messages_.size();   // free here; reading it later would retake the lock
 +  }
-+  // Normal depth is 1-3, so this stays silent until a queue actually backs up. Logging
-+  // every post measured 165k lines in 2h on an idle node.
-+  if (depth >= kDeepQueueLoggingThreshold) {
++  // Normal depth is 1-3, so this stays silent until a queue actually backs up, and then
++  // reports only at powers of two: a 13,696-deep queue costs ~10 lines, not 13,696.
++  if (depth >= kDeepQueueLoggingThreshold && (depth & (depth - 1)) == 0) {
 +    RTC_LOG(LS_INFO) << "Queue depth " << depth << " on thread " << name_
 +                     << " after posting from: " << posted_from.ToString();
    }
    WakeUpSocketServer();
  }
-@@ -577,6 +596,10 @@ void Thread::DoDelayPost(const Location& posted_from,
+@@ -577,6 +602,10 @@ void Thread::DoDelayPost(const Location& posted_from,
    {
      CritScope cs(&crit_);
      Message msg;
@@ -75,7 +82,7 @@ index a8cb022fa9..efd2af551e 100644
      msg.posted_from = posted_from;
      msg.phandler = phandler;
      msg.message_id = id;
-@@ -656,18 +679,40 @@ void Thread::ClearInternal(MessageHandler* phandler,
+@@ -656,18 +685,47 @@ void Thread::ClearInternal(MessageHandler* phandler,
    delayed_messages_.reheap();
  }
  
@@ -112,15 +119,22 @@ index a8cb022fa9..efd2af551e 100644
 +      pmsg->posted_ms != 0 ? TimeDiff(start_time, pmsg->posted_ms) : -1;
 +  // Either side crossing the bar is worth a line. Gating on dispatch alone hides the
 +  // case this exists for: a message that waits a long time and then runs in microseconds.
-+  if (diff >= kSlowDispatchLoggingThreshold ||
-+      queued_ms >= kSlowDispatchLoggingThreshold) {
++  // A slow dispatch is rare and always worth a line. A long queue wait is not: when a
++  // queue backs up, every message in it waited, so log at most one per interval.
++  bool report_queue_wait = false;
++  if (queued_ms >= kSlowDispatchLoggingThreshold &&
++      TimeDiff(end_time, last_queue_wait_log_ms_) >= kQueueWaitLogIntervalMs) {
++    last_queue_wait_log_ms_ = end_time;
++    report_queue_wait = true;
++  }
++  if (diff >= kSlowDispatchLoggingThreshold || report_queue_wait) {
 +    RTC_LOG(LS_INFO) << "Message took " << diff << "ms to dispatch, after "
 +                     << queued_ms << "ms queued on thread " << name_
 +                     << ". Posted from: " << pmsg->posted_from.ToString();
    }
  }
  
-@@ -883,13 +928,16 @@ void Thread::Send(const Location& posted_from,
+@@ -883,13 +941,16 @@ void Thread::Send(const Location& posted_from,
                                                             this);
  #endif
    bool ready = false;
@@ -144,7 +158,7 @@ index a8cb022fa9..efd2af551e 100644
  
    bool waited = false;
    crit_.Enter();
-@@ -977,8 +1025,27 @@ bool Thread::IsProcessingMessagesForTesting() {
+@@ -977,8 +1038,27 @@ bool Thread::IsProcessingMessagesForTesting() {
  void Thread::Clear(MessageHandler* phandler,
                     uint32_t id,
                     MessageList* removed) {
@@ -174,6 +188,20 @@ index a8cb022fa9..efd2af551e 100644
  }
  
  bool Thread::ProcessMessages(int cmsLoop) {
+diff --git a/rtc_base/thread.h b/rtc_base/thread.h
+index 74aab623c8..0dd1704402 100644
+--- a/rtc_base/thread.h
++++ b/rtc_base/thread.h
+@@ -596,6 +596,9 @@ class RTC_LOCKABLE RTC_EXPORT Thread : public webrtc::TaskQueueBase {
+   // Runs webrtc::QueuedTask posted to the Thread.
+   QueuedTaskHandler queued_task_handler_;
+ 
++  // Rate limit for the queue-wait log. Only Dispatch touches it, on this thread.
++  int64_t last_queue_wait_log_ms_ = 0;
++
+   friend class ThreadManager;
+ 
+   RTC_DISALLOW_COPY_AND_ASSIGN(Thread);
 diff --git a/rtc_base/thread_message.h b/rtc_base/thread_message.h
 index 80824e29e5..404b96e395 100644
 --- a/rtc_base/thread_message.h
