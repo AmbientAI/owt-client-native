@@ -1501,10 +1501,12 @@ Json::Value P2PPeerConnectionChannel::UaInfo() {
   os[kUaOsNameKey] = sys_info.os.name;
   os[kUaOsVersionKey] = sys_info.os.version;
   // Capabilities and customized configuration
-  // TODO: currently default to support continual ICE gathering,
-  // Plan-B, and stream removable.
+  // TODO: currently default to support Plan-B and stream removable.
   Json::Value capabilities;
-  capabilities[kUaContinualGatheringKey] = true;
+  capabilities[kUaContinualGatheringKey] =
+      (configuration_.continual_gathering_policy ==
+       webrtc::PeerConnectionInterface::ContinualGatheringPolicy::
+           GATHER_CONTINUALLY);
   capabilities[kUaUnifiedPlanKey] = true;
   capabilities[kUaStreamRemovableKey] = true;
   capabilities[kUaIgnoresDataChannelAcksKey] = true;
