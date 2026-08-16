@@ -13,7 +13,8 @@ namespace base{
 struct ClientConfiguration {
   enum class CandidateNetworkPolicy : int { kAll = 1, kLowCost };
   ClientConfiguration()
-       : candidate_network_policy(CandidateNetworkPolicy::kAll) {}
+       : candidate_network_policy(CandidateNetworkPolicy::kAll),
+         continual_ice_gathering(true) {}
   /// List of ICE servers
   std::vector<IceServer> ice_servers;
   /**
@@ -23,6 +24,15 @@ struct ClientConfiguration {
    network experience. Default policy is collecting all candidates.
    */
   CandidateNetworkPolicy candidate_network_policy;
+  /**
+   @brief ICE gathering lifetime for each peer connection.
+   @details true (default) maps to GATHER_CONTINUALLY: the port allocator stays
+   alive and gathers new candidates on network changes for the lifetime of the
+   connection. false maps to GATHER_ONCE: candidates are gathered only during
+   initial negotiation; recovering from a network change then requires an ICE
+   restart.
+   */
+  bool continual_ice_gathering;
 };
 }
 }
