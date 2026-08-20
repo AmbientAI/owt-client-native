@@ -1016,8 +1016,12 @@ void P2PPeerConnectionChannel::Unpublish(
   //   return;
   // }
   RTC_CHECK(stream->MediaStream());
+  // MediaStream()->id() is a blocking proxy hop to signaling_thread, and the two mutexes
+  // below are shared with publishes, so each is timed separately from the drain.
+  const int64_t t_unpub_enter = rtc::TimeMillis();
   // Calling MediaStream->id() runs on signaling_thread, so must be outside locks.
   std::string stream_id = stream->MediaStream()->id();
+  const int64_t t_streamid = rtc::TimeMillis();
   {
     std::lock_guard<std::mutex> lock(published_streams_mutex_);
     auto it = published_streams_.find(stream_id);
@@ -1037,6 +1041,7 @@ void P2PPeerConnectionChannel::Unpublish(
       published_streams_.erase(it);
     }
   }
+  const int64_t t_pubmap = rtc::TimeMillis();
   {
     std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
     pending_unpublish_streams_.push_back(stream);
@@ -1044,7 +1049,14 @@ void P2PPeerConnectionChannel::Unpublish(
   if (on_success) {
     on_success();
   }
+  const int64_t t_queued = rtc::TimeMillis();
   DrainPendingStreams();
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_phases peerid=" << remote_id_
+                    << " streamid_ms=" << (t_streamid - t_unpub_enter)
+                    << " pubmap_lock_ms=" << (t_pubmap - t_streamid)
+                    << " queue_ms=" << (t_queued - t_pubmap)
+                    << " drain_ms=" << (rtc::TimeMillis() - t_queued)
+                    << " total_ms=" << (rtc::TimeMillis() - t_unpub_enter);
 }
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
@@ -1313,17 +1325,35 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           }
         }
       }
+      // GetTransceivers, sender()->track(), RemoveTrack and Stop are all PROXY_METHODs on
+      // PeerConnection, so each is a blocking Send to signaling_thread. Counting the hops
+      // alongside the elapsed time separates "many cheap hops" from "few slow ones", which
+      // need different fixes and are indistinguishable from a single total.
+      const int64_t t_vid = rtc::TimeMillis();
+      int hops = 0, n_transceivers = 0;
+      const size_t n_video_tracks = media_stream->GetVideoTracks().size();
       for (const auto& track : media_stream->GetVideoTracks()) {
         const auto& transceivers = temp_pc_->GetTransceivers();
+        ++hops;
+        n_transceivers = static_cast<int>(transceivers.size());
         for (auto& transceiver : transceivers) {
           const auto& ttrack = transceiver->sender()->track();
+          ++hops;
           if (ttrack != nullptr && ttrack->id() == track->id()) {
             temp_pc_->RemoveTrack(transceiver->sender());
             transceiver->Stop();
+            hops += 2;
             break;
           }
         }
       }
+      const int64_t vid_ms = rtc::TimeMillis() - t_vid;
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
+                        << " video_tracks=" << n_video_tracks
+                        << " transceivers=" << n_transceivers
+                        << " hops=" << hops
+                        << " video_loop_ms=" << vid_ms
+                        << " us_per_hop=" << (hops ? (vid_ms * 1000) / hops : 0);
     }
   }
   publish_snapshot.clear();
