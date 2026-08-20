@@ -6,6 +6,7 @@
 #include "webrtc/rtc_base/critical_section.h"
 #include "webrtc/rtc_base/logging.h"
 #include "webrtc/rtc_base/task_queue.h"
+#include "webrtc/rtc_base/time_utils.h"
 #include "talk/owt/sdk/base/stringutils.h"
 #include "talk/owt/sdk/include/cpp/owt/p2p/p2pclient.h"
 #include "talk/owt/sdk/include/cpp/owt/p2p/p2ppublication.h"
@@ -63,13 +64,28 @@ void P2PPublication::GetStats(
 void P2PPublication::Stop() {
   auto that = p2p_client_.lock();
   if (that == nullptr || ended_) {
+    // A no-op Stop() and a fast one are both stop_ms=0 to the caller, so say which.
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=stop_noop peerid=" << target_id_
+                      << " ended=" << ended_
+                      << " client_gone=" << (that == nullptr);
     return;
   } else {
+    // remove_stream on a live node attributes 100% of a hangup's cost to this call
+    // (185ms p50, 702ms max, every lock in the appliance path at 0-1ms). Split it.
+    const int64_t t0 = rtc::TimeMillis();
     that->Unpublish(target_id_, local_stream_, nullptr, nullptr);
+    const int64_t t1 = rtc::TimeMillis();
     ended_ = true;
     const std::lock_guard<std::mutex> lock(observer_mutex_);
+    const int64_t t2 = rtc::TimeMillis();
     for (auto its = observers_.begin(); its != observers_.end(); ++its)
       (*its).get().OnEnded();
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=stop_phases peerid=" << target_id_
+                      << " unpublish_ms=" << (t1 - t0)
+                      << " observer_lock_ms=" << (t2 - t1)
+                      << " on_ended_ms=" << (rtc::TimeMillis() - t2)
+                      << " observers=" << observers_.size()
+                      << " total_ms=" << (rtc::TimeMillis() - t0);
   }
 }
 void P2PPublication::AddObserver(PublicationObserver& observer) {

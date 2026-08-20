@@ -57,7 +57,7 @@ struct PeerConnectionChannelConfiguration
   bool encoded_video_frame_;
   /// Run the unpublish transceiver walk inside one Invoke on signaling_thread.
   /// See ClientConfiguration::unpublish_on_signaling_thread.
-  bool unpublish_on_signaling_thread = false;
+  bool unpublish_on_signaling_thread = true;
 };
 class PeerConnectionChannel : public webrtc::PeerConnectionObserver,
                               public webrtc::DataChannelObserver,

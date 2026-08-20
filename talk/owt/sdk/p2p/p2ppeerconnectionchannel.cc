@@ -22,6 +22,7 @@
 #include "talk/owt/sdk/base/sysinfo.h"
 #include "talk/owt/sdk/p2p/p2ppeerconnectionchannel.h"
 #include "webrtc/rtc_base/logging.h"
+#include "webrtc/rtc_base/time_utils.h"
 #include "webrtc/api/task_queue/default_task_queue_factory.h"
 
 using namespace rtc;
@@ -1324,16 +1325,46 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
             }
           }
         }
+        // Instrumented so the flag's effect is measurable: with it off every scan step
+        // is a marshal, with it on they are direct calls, and scanned/us_per_scan say
+        // which happened. transceivers= also shows the list still growing either way.
+        const int64_t t_vid = rtc::TimeMillis();
+        int n_transceivers = 0, scanned = 0;
+        int64_t get_us = 0, scan_us = 0, remove_us = 0, stop_us = 0;
+        const size_t n_video_tracks = media_stream->GetVideoTracks().size();
         for (const auto& track : media_stream->GetVideoTracks()) {
-          for (auto& transceiver : temp_pc_->GetTransceivers()) {
+          const int64_t t_get = rtc::TimeMicros();
+          const auto& transceivers = temp_pc_->GetTransceivers();
+          get_us += rtc::TimeMicros() - t_get;
+          n_transceivers = static_cast<int>(transceivers.size());
+          for (auto& transceiver : transceivers) {
+            const int64_t t_s = rtc::TimeMicros();
             const auto& ttrack = transceiver->sender()->track();
+            scan_us += rtc::TimeMicros() - t_s;
+            ++scanned;
             if (ttrack != nullptr && ttrack->id() == track->id()) {
+              const int64_t t_r = rtc::TimeMicros();
               temp_pc_->RemoveTrack(transceiver->sender());
+              const int64_t t_st = rtc::TimeMicros();
               transceiver->Stop();
+              remove_us += t_st - t_r;
+              stop_us += rtc::TimeMicros() - t_st;
               break;
             }
           }
         }
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
+                          << " on_signaling_thread="
+                          << configuration_.unpublish_on_signaling_thread
+                          << " video_tracks=" << n_video_tracks
+                          << " transceivers=" << n_transceivers
+                          << " video_loop_ms=" << (rtc::TimeMillis() - t_vid)
+                          << " scanned=" << scanned
+                          << " get_us=" << get_us
+                          << " scan_us=" << scan_us
+                          << " remove_us=" << remove_us
+                          << " stop_us=" << stop_us
+                          << " us_per_scan=" << (scanned ? scan_us / scanned : 0);
       };
       // Same singleton PeerConnectionChannel assigns to factory_, which is private in
       // the base class.
