@@ -1329,19 +1329,35 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       // PeerConnection, so each is a blocking Send to signaling_thread. Counting the hops
       // alongside the elapsed time separates "many cheap hops" from "few slow ones", which
       // need different fixes and are indistinguishable from a single total.
+      // GetTransceivers, sender()->track(), RemoveTrack and Stop are all PROXY_METHODs on
+      // PeerConnection, so each is a blocking Send to signaling_thread. The scan and the
+      // two mutating calls are timed apart: hop count alone cannot tell whether the cost
+      // is the O(transceivers) search or RemoveTrack renegotiating internally.
       const int64_t t_vid = rtc::TimeMillis();
-      int hops = 0, n_transceivers = 0;
+      int hops = 0, n_transceivers = 0, scanned = 0;
+      int64_t get_us = 0, scan_us = 0, remove_us = 0, stop_us = 0;
       const size_t n_video_tracks = media_stream->GetVideoTracks().size();
       for (const auto& track : media_stream->GetVideoTracks()) {
+        const int64_t t_get = rtc::TimeMicros();
         const auto& transceivers = temp_pc_->GetTransceivers();
+        get_us += rtc::TimeMicros() - t_get;
         ++hops;
         n_transceivers = static_cast<int>(transceivers.size());
         for (auto& transceiver : transceivers) {
+          const int64_t t_s = rtc::TimeMicros();
           const auto& ttrack = transceiver->sender()->track();
-          ++hops;
+          scan_us += rtc::TimeMicros() - t_s;
+          ++hops; ++scanned;
           if (ttrack != nullptr && ttrack->id() == track->id()) {
+            // RemoveTrack can renegotiate internally, Stop() only marks the transceiver;
+            // timed apart so a slow teardown is attributable to one or the other.
+            const int64_t t_r = rtc::TimeMicros();
             temp_pc_->RemoveTrack(transceiver->sender());
+            const int64_t t_st = rtc::TimeMicros();
             transceiver->Stop();
+            const int64_t t_end = rtc::TimeMicros();
+            remove_us += t_st - t_r;
+            stop_us += t_end - t_st;
             hops += 2;
             break;
           }
@@ -1353,7 +1369,12 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
                         << " transceivers=" << n_transceivers
                         << " hops=" << hops
                         << " video_loop_ms=" << vid_ms
-                        << " us_per_hop=" << (hops ? (vid_ms * 1000) / hops : 0);
+                        << " scanned=" << scanned
+                        << " get_us=" << get_us
+                        << " scan_us=" << scan_us
+                        << " remove_us=" << remove_us
+                        << " stop_us=" << stop_us
+                        << " us_per_scan=" << (scanned ? scan_us / scanned : 0);
     }
   }
   publish_snapshot.clear();
