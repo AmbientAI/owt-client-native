@@ -22,6 +22,7 @@
 #include "talk/owt/sdk/base/sysinfo.h"
 #include "talk/owt/sdk/p2p/p2ppeerconnectionchannel.h"
 #include "webrtc/rtc_base/logging.h"
+#include "webrtc/rtc_base/time_utils.h"
 #include "webrtc/api/task_queue/default_task_queue_factory.h"
 
 using namespace rtc;
@@ -1313,27 +1314,101 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       // marshal instead: SynchronousMethodCall::Invoke calls the handler directly when
       // t->IsCurrent(), as does Thread::Send, so every proxy call inside the lambda
       // short-circuits. Behind a flag because it moves where the loop executes.
+      // Instrumented so the flag's effect is measurable: with it off every step of the
+      // walk is a marshal, with it on they are direct calls, and scanned/us_per_scan say
+      // which happened. Both media loops are counted, and the timers bracket the whole
+      // lambda, so the parts sum to total_ms -- an earlier version timed only the video
+      // loop and left the audio walk outside the window, which is why 58% of a 26s
+      // teardown was unattributed. transceivers= also shows the list still growing.
+      int n_transceivers = 0, scanned = 0;
+      int64_t get_us = 0, scan_us = 0, remove_us = 0, stop_us = 0;
+      int64_t audio_us = 0, video_us = 0;
+      size_t n_audio_tracks = 0, n_video_tracks = 0;
+      // How much of the walk is corpses. hit_index is where the match sat
+      // (-1 = no match, which should not happen for a track being unpublished),
+      // dead_before_hit how many trackless transceivers were stepped over to
+      // reach it. If dead_before_hit tracks hit_index then accumulation is the
+      // whole cost and recycling stopped transceivers is the real fix; if it
+      // stays near zero the growth is live transceivers and the walk length is
+      // not the problem.
+      int hit_index = -1, dead_before_hit = 0;
+      auto unpublish_one = [&](const rtc::scoped_refptr<webrtc::MediaStreamTrackInterface>& track) {
+        const int64_t t_get = rtc::TimeMicros();
+        const auto& transceivers = temp_pc_->GetTransceivers();
+        get_us += rtc::TimeMicros() - t_get;
+        n_transceivers = static_cast<int>(transceivers.size());
+        int index = 0, dead_seen = 0;
+        for (auto& transceiver : transceivers) {
+          const int64_t t_s = rtc::TimeMicros();
+          const auto& ttrack = transceiver->sender()->track();
+          scan_us += rtc::TimeMicros() - t_s;
+          ++scanned;
+          // A retired transceiver: RemoveTrack cleared its track, but it stays in
+          // the list because its m= line cannot leave an already-negotiated SDP.
+          // Read off the track already fetched above rather than stopped(), which
+          // is PROXY_CONSTMETHOD0 and would double the marshals when the flag is
+          // off. Counted, not skipped -- the walk itself is unchanged.
+          if (ttrack == nullptr) {
+            ++dead_seen;
+          }
+          if (ttrack != nullptr && ttrack->id() == track->id()) {
+            hit_index = index;
+            dead_before_hit = dead_seen;
+            const int64_t t_r = rtc::TimeMicros();
+            temp_pc_->RemoveTrack(transceiver->sender());
+            const int64_t t_st = rtc::TimeMicros();
+            transceiver->Stop();
+            remove_us += t_st - t_r;
+            stop_us += rtc::TimeMicros() - t_st;
+            break;
+          }
+          ++index;
+        }
+      };
       auto unpublish_all = [&] {
+        const int64_t t_all = rtc::TimeMicros();
+        // Proof that the Invoke landed: if this is false the proxy calls below still
+        // marshal and the flag bought nothing.
+        rtc::Thread* sig_now = PeerConnectionDependencyFactory::Get() != nullptr
+                                   ? PeerConnectionDependencyFactory::Get()->SignalingThread()
+                                   : nullptr;
+        const bool on_sig = (sig_now != nullptr && sig_now->IsCurrent());
+        // One bare GetTransceivers, timed alone, as a single-call control.
+        const int64_t t_ctl = rtc::TimeMicros();
+        const size_t ctl_n = temp_pc_->GetTransceivers().size();
+        const int64_t ctl_us = rtc::TimeMicros() - t_ctl;
+        const int64_t t_audio = t_all;
         for (const auto& track : media_stream->GetAudioTracks()) {
-          for (auto& transceiver : temp_pc_->GetTransceivers()) {
-            const auto& ttrack = transceiver->sender()->track();
-            if (ttrack != nullptr && ttrack->id() == track->id()) {
-              temp_pc_->RemoveTrack(transceiver->sender());
-              transceiver->Stop();
-              break;
-            }
-          }
+          ++n_audio_tracks;
+          unpublish_one(track);
         }
+        const int64_t t_video = rtc::TimeMicros();
+        audio_us = t_video - t_audio;
         for (const auto& track : media_stream->GetVideoTracks()) {
-          for (auto& transceiver : temp_pc_->GetTransceivers()) {
-            const auto& ttrack = transceiver->sender()->track();
-            if (ttrack != nullptr && ttrack->id() == track->id()) {
-              temp_pc_->RemoveTrack(transceiver->sender());
-              transceiver->Stop();
-              break;
-            }
-          }
+          ++n_video_tracks;
+          unpublish_one(track);
         }
+        video_us = rtc::TimeMicros() - t_video;
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
+                          << " on_signaling_thread="
+                          << configuration_.unpublish_on_signaling_thread
+                          << " audio_tracks=" << n_audio_tracks
+                          << " video_tracks=" << n_video_tracks
+                          << " transceivers=" << n_transceivers
+                          << " hit_index=" << hit_index
+                          << " dead_before_hit=" << dead_before_hit
+                          << " total_ms=" << (rtc::TimeMicros() - t_all) / 1000
+                          << " audio_us=" << audio_us
+                          << " video_us=" << video_us
+                          << " scanned=" << scanned
+                          << " get_us=" << get_us
+                          << " scan_us=" << scan_us
+                          << " remove_us=" << remove_us
+                          << " stop_us=" << stop_us
+                          << " us_per_scan=" << (scanned ? scan_us / scanned : 0)
+                          << " on_sig_actual=" << on_sig
+                          << " ctl_gettransceivers_us=" << ctl_us
+                          << " ctl_n=" << ctl_n;
       };
       // Same singleton PeerConnectionChannel assigns to factory_, which is private in
       // the base class.

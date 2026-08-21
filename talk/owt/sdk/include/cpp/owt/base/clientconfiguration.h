@@ -15,7 +15,7 @@ struct ClientConfiguration {
   ClientConfiguration()
        : candidate_network_policy(CandidateNetworkPolicy::kAll),
          continual_ice_gathering(true),
-         unpublish_on_signaling_thread(false) {}
+         unpublish_on_signaling_thread(true) {}
   /// List of ICE servers
   std::vector<IceServer> ice_servers;
   /**
