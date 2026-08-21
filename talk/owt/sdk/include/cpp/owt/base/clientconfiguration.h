@@ -36,21 +36,9 @@ struct ClientConfiguration {
   bool continual_ice_gathering;
   /**
    @brief Which thread runs the unpublish transceiver walk in DrainPendingStreams.
-   @details false (default) leaves it on the calling thread, which is an appliance
-   thread-pool worker. Every step of the walk -- transceiver->sender(),
-   RemoveTrack, transceiver->Stop() -- is a PROXY method on a
-   BEGIN_SIGNALING_PROXY_MAP class, so each one marshals to signaling_thread and
-   blocks. The transceiver list only grows, since RemoveTrack stops a transceiver
-   but leaves it in place and nothing rebuilds the PeerConnection, so the walk
-   lengthens for the life of the connection. Measured on a production node whose
-   list had reached 462 entries: 131-307 marshals per teardown at 1239-3325us
-   each, 97.9% of a 445ms unpublish, and hangups taking 1-3s.
-
-   true wraps the same walk in one Invoke on signaling_thread. The loop body is
-   unchanged; only the thread it runs on differs. Inside that lambda every proxy
-   call short-circuits -- SynchronousMethodCall::Invoke calls the handler directly
-   when t->IsCurrent(), as does Thread::Send -- so the whole walk costs one
-   marshal instead of one per element.
+   @details false (default) walks it on the calling thread, where every step is a
+   signaling proxy call and marshals. true runs the same loop inside one
+   Invoke on signaling_thread.
    */
   bool unpublish_on_signaling_thread;
 };

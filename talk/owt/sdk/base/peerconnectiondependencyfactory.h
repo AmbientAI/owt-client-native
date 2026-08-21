@@ -58,12 +58,9 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   // Returns current |pc_factory_|.
   rtc::scoped_refptr<PeerConnectionFactoryInterface> PeerConnectionFactory()
       const;
-  // The thread this factory handed to CreatePeerConnectionFactory as the
-  // signaling thread, i.e. the one every PeerConnection proxy method marshals
-  // to. Exposed so a caller holding several proxy handles can do its work in one
-  // Invoke instead of one marshal per call: SynchronousMethodCall::Invoke calls
-  // straight through when t->IsCurrent(), so proxy calls made inside such a
-  // lambda cost nothing extra.
+  // The thread every PeerConnection proxy method marshals to. Exposed so a caller
+  // holding several proxy handles can do its work in one Invoke rather than one
+  // marshal per call.
   rtc::Thread* SignalingThread() const { return signaling_thread.get(); }
   ~PeerConnectionDependencyFactory();
  protected:
