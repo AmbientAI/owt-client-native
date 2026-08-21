@@ -1347,6 +1347,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           };
 
       // LS_INFO (elevated to LS_ERROR — see file header note)
+      // TODO (atharva): Check if failed and stopped transceivers are 
+      // growing at high rate and should we clean them up as well to 
+      // reduce interations of for loop.
       auto log_unpublish = [&] {
         RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
                           << " on_signaling_thread="
