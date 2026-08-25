@@ -14,7 +14,8 @@ struct ClientConfiguration {
   enum class CandidateNetworkPolicy : int { kAll = 1, kLowCost };
   ClientConfiguration()
        : candidate_network_policy(CandidateNetworkPolicy::kAll),
-         continual_ice_gathering(true) {}
+         continual_ice_gathering(true),
+         unpublish_on_signaling_thread(false) {}
   /// List of ICE servers
   std::vector<IceServer> ice_servers;
   /**
@@ -33,6 +34,13 @@ struct ClientConfiguration {
    restart.
    */
   bool continual_ice_gathering;
+  /**
+   @brief Which thread runs the unpublish transceiver walk in DrainPendingStreams.
+   @details false (default) walks it on the calling thread, where every step is a
+   signaling proxy call and marshals. true runs the same loop inside one
+   Invoke on signaling_thread.
+   */
+  bool unpublish_on_signaling_thread;
 };
 }
 }

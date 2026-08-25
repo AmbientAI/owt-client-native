@@ -392,6 +392,8 @@ PeerConnectionChannelConfiguration P2PClient::GetPeerConnectionChannelConfigurat
       configuration_.continual_ice_gathering
           ? PeerConnectionInterface::ContinualGatheringPolicy::GATHER_CONTINUALLY
           : PeerConnectionInterface::ContinualGatheringPolicy::GATHER_ONCE;
+  config.unpublish_on_signaling_thread =
+      configuration_.unpublish_on_signaling_thread;
 
   // See webrtc/api/peer_connection_interface.h for details on the options
   // https://tools.ietf.org/html/draft-ietf-rtcweb-jsep-24#section-4.1.1

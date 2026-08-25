@@ -1302,7 +1302,71 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
       RTC_CHECK(temp_pc_);
+      PeerConnectionDependencyFactory* dependency_factory =
+          configuration_.unpublish_on_signaling_thread
+              ? PeerConnectionDependencyFactory::Get()
+              : nullptr;
+      rtc::Thread* signaling_thread = dependency_factory != nullptr
+                                          ? dependency_factory->SignalingThread()
+                                          : nullptr;
+      const bool hop = signaling_thread != nullptr && !signaling_thread->IsCurrent();
+
+      size_t n_transceivers = 0;
+      int scanned = 0, hit_index = -1;
+      int trackless_before_hit = 0, stopped_before_hit = 0;
+
+      // Every step here is a signaling proxy call, so off-thread each one marshals.
+      // Running unpublish_track() on signaling_thread makes the whole walk a single hop.
+      auto unpublish_track =
+          [&](const rtc::scoped_refptr<webrtc::MediaStreamTrackInterface>& track) {
+            RTC_DCHECK(signaling_thread != nullptr && signaling_thread->IsCurrent());
+            // Per track, not cumulative: a miss must leave hit_index at -1 rather
+            // than inheriting the previous track's hit.
+            scanned = trackless_before_hit = stopped_before_hit = 0;
+            hit_index = -1;
+            const auto& transceivers = temp_pc_->GetTransceivers();
+            n_transceivers = transceivers.size();
+            int index = 0;
+            for (auto& transceiver : transceivers) {
+              const auto& ttrack = transceiver->sender()->track();
+              if (ttrack == nullptr) {
+                ++trackless_before_hit;
+              }
+              if (transceiver->stopped()) {
+                ++stopped_before_hit;
+              }
+              if (ttrack != nullptr && ttrack->id() == track->id()) {
+                hit_index = index;
+                temp_pc_->RemoveTrack(transceiver->sender());
+                transceiver->Stop();
+                break;
+              }
+              ++index;
+            }
+            scanned = index;
+          };
+
+      // LS_INFO (elevated to LS_ERROR — see file header note)
+      // TODO (atharva): Check if failed and stopped transceivers are 
+      // growing at high rate and should we clean them up as well to 
+      // reduce interations of for loop.
+      auto log_unpublish = [&] {
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
+                          << " on_signaling_thread="
+                          << configuration_.unpublish_on_signaling_thread
+                          << " transceivers=" << n_transceivers
+                          << " scanned=" << scanned
+                          << " hit_index=" << hit_index
+                          << " trackless_before_hit=" << trackless_before_hit
+                          << " stopped_before_hit=" << stopped_before_hit;
+      };
+
       for (const auto& track : media_stream->GetAudioTracks()) {
+        if (hop) {
+          signaling_thread->Invoke<void>(RTC_FROM_HERE, [&] { unpublish_track(track); });
+          log_unpublish();
+          continue;
+        }
         const auto& transceivers = temp_pc_->GetTransceivers();
         for (auto& transceiver : transceivers) {
           const auto& ttrack = transceiver->sender()->track();
@@ -1314,6 +1378,11 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         }
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
+        if (hop) {
+          signaling_thread->Invoke<void>(RTC_FROM_HERE, [&] { unpublish_track(track); });
+          log_unpublish();
+          continue;
+        }
         const auto& transceivers = temp_pc_->GetTransceivers();
         for (auto& transceiver : transceivers) {
           const auto& ttrack = transceiver->sender()->track();

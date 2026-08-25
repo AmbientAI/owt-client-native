@@ -58,6 +58,10 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   // Returns current |pc_factory_|.
   rtc::scoped_refptr<PeerConnectionFactoryInterface> PeerConnectionFactory()
       const;
+  // The thread every PeerConnection proxy method marshals to. Exposed so a caller
+  // holding several proxy handles can do its work in one Invoke rather than one
+  // marshal per call.
+  rtc::Thread* SignalingThread() const { return signaling_thread.get(); }
   ~PeerConnectionDependencyFactory();
  protected:
   explicit PeerConnectionDependencyFactory();
