@@ -1204,6 +1204,8 @@ bool P2PPeerConnectionChannel::IsStale() {
 }
 void P2PPeerConnectionChannel::DrainPendingStreams() {
   RTC_LOG(LS_INFO) << "Draining pending stream";
+  const auto drain_t0 = std::chrono::steady_clock::now();
+  int64_t publish_loop_us = 0, unpublish_loop_us = 0;
   ChangeSessionState(kSessionStateConnecting);
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   // Move contents of pending vectors to a temporary vector so
@@ -1232,6 +1234,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
   }
   // Snapshot vectors have no contention, safe to call webrtc methods.
   if (temp_pc_) {
+    const auto publish_loop_t0 = std::chrono::steady_clock::now();
     // Snapshot vector has no thread contention, safe to call webrtc methods.
     for (auto it = publish_snapshot.begin(); it != publish_snapshot.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
@@ -1297,6 +1300,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       json_stream_info[kMessageDataKey] = stream_info;
       SendSignalingMessage(json_stream_info);
     }
+    publish_loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::steady_clock::now() - publish_loop_t0).count();
+    const auto unpublish_loop_t0 = std::chrono::steady_clock::now();
     for (auto it = unpublish_snapshot.begin(); it != unpublish_snapshot.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
@@ -1394,7 +1400,18 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         }
       }
     }
+    unpublish_loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - unpublish_loop_t0).count();
   }
+  // LS_ERROR so it survives the appliance's kError OWT log severity.
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_timing peerid=" << remote_id_
+                    << " publish_streams=" << publish_snapshot.size()
+                    << " unpublish_streams=" << unpublish_snapshot.size()
+                    << " publish_loop_us=" << publish_loop_us
+                    << " unpublish_loop_us=" << unpublish_loop_us
+                    << " total_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - drain_t0).count();
   publish_snapshot.clear();
   unpublish_snapshot.clear();
 }
