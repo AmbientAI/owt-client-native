@@ -13,6 +13,7 @@
 // TODO: Fix at binary level — configure OWT to emit LS_INFO or lower so log
 // levels here can be set correctly (LS_INFO for lifecycle events, LS_WARNING
 // for non-critical issues, LS_ERROR only for genuine failures).
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -1206,6 +1207,10 @@ bool P2PPeerConnectionChannel::IsStale() {
 void P2PPeerConnectionChannel::DrainPendingStreams() {
   RTC_LOG(LS_INFO) << "Draining pending stream";
   const auto drain_t0 = std::chrono::steady_clock::now();
+  // Monotonic per-process id stamped on every line this drain emits, so the
+  // lines below join to one drain without needing timestamps (RTC_LOG has none).
+  static std::atomic<uint64_t> drain_seq{0};
+  const uint64_t drain_id = drain_seq.fetch_add(1, std::memory_order_relaxed);
   int64_t publish_loop_us = 0, unpublish_loop_us = 0;
   ChangeSessionState(kSessionStateConnecting);
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
@@ -1311,10 +1316,21 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
     publish_loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
                           std::chrono::steady_clock::now() - publish_loop_t0).count();
     const auto unpublish_loop_t0 = std::chrono::steady_clock::now();
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_loop_enter drain_id=" << drain_id
+                      << " peerid=" << remote_id_
+                      << " streams=" << unpublish_snapshot.size();
+    int unpublish_stream_idx = 0;
     for (auto it = unpublish_snapshot.begin(); it != unpublish_snapshot.end(); ++it) {
+      // Per stream: setup before any track work — MediaStream() and
+      // SignalingThread() are both proxy calls that can marshal.
+      const auto stream_t0 = std::chrono::steady_clock::now();
+      const int stream_idx = unpublish_stream_idx++;
       std::shared_ptr<LocalStream> stream = *it;
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
+      const auto mediastream_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - stream_t0).count();
       RTC_CHECK(temp_pc_);
       PeerConnectionDependencyFactory* dependency_factory =
           configuration_.unpublish_on_signaling_thread
@@ -1324,25 +1340,48 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
                                           ? dependency_factory->SignalingThread()
                                           : nullptr;
       const bool hop = signaling_thread != nullptr && !signaling_thread->IsCurrent();
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_stream_setup drain_id=" << drain_id
+                        << " peerid=" << remote_id_
+                        << " stream_idx=" << stream_idx
+                        << " hop=" << hop
+                        << " mediastream_us=" << mediastream_us
+                        << " total_us="
+                        << std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - stream_t0).count();
 
       size_t n_transceivers = 0;
       int scanned = 0, hit_index = -1;
       int trackless_before_hit = 0, stopped_before_hit = 0;
       int64_t remove_track_us = 0, stop_us = 0;
+      // Measured, not derived. hop_t0 is stamped immediately before Invoke() and
+      // read as the first statement inside the lambda, so hop_wait_us is the
+      // queue wait itself rather than a parent-minus-children remainder.
+      std::chrono::steady_clock::time_point hop_t0;
+      int64_t hop_wait_us = 0, gettrans_us = 0, walk_us = 0, body_us = 0;
 
       // Every step here is a signaling proxy call, so off-thread each one marshals.
       // Running unpublish_track() on signaling_thread makes the whole walk a single hop.
       auto unpublish_track =
           [&](const rtc::scoped_refptr<webrtc::MediaStreamTrackInterface>& track) {
             RTC_DCHECK(signaling_thread != nullptr && signaling_thread->IsCurrent());
+            // First statement: everything between hop_t0 and here is queue wait.
+            const auto body_t0 = std::chrono::steady_clock::now();
+            hop_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                              body_t0 - hop_t0).count();
             // Per track, not cumulative: a miss must leave hit_index at -1 rather
             // than inheriting the previous track's hit.
             scanned = trackless_before_hit = stopped_before_hit = 0;
             hit_index = -1;
             remove_track_us = stop_us = 0;
+            const auto gettrans_t0 = std::chrono::steady_clock::now();
             const auto& transceivers = temp_pc_->GetTransceivers();
+            gettrans_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - gettrans_t0).count();
             n_transceivers = transceivers.size();
             int index = 0;
+            // Walk cost excluding RemoveTrack/Stop, which are timed on their own.
+            const auto walk_t0 = std::chrono::steady_clock::now();
+            walk_us = 0;
             for (auto& transceiver : transceivers) {
               const auto& ttrack = transceiver->sender()->track();
               if (ttrack == nullptr) {
@@ -1354,6 +1393,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
               if (ttrack != nullptr && ttrack->id() == track->id()) {
                 hit_index = index;
                 const auto remove_t0 = std::chrono::steady_clock::now();
+                // Walk ends here; the rest is RemoveTrack/Stop, timed below.
+                walk_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                              remove_t0 - walk_t0).count();
                 temp_pc_->RemoveTrack(transceiver->sender());
                 const auto stop_t0 = std::chrono::steady_clock::now();
                 transceiver->Stop();
@@ -1365,15 +1407,25 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
               }
               ++index;
             }
+            // No hit: the loop ran to completion, so the whole span was walking.
+            if (hit_index < 0) {
+              walk_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - walk_t0).count();
+            }
             scanned = index;
+            body_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::steady_clock::now() - body_t0).count();
           };
 
       // LS_INFO (elevated to LS_ERROR — see file header note)
       // TODO (atharva): Check if failed and stopped transceivers are 
       // growing at high rate and should we clean them up as well to 
       // reduce interations of for loop.
-      auto log_unpublish = [&] {
-        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
+      auto log_unpublish = [&](const char* kind) {
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish drain_id=" << drain_id
+                          << " peerid=" << remote_id_
+                          << " stream_idx=" << stream_idx
+                          << " kind=" << kind
                           << " on_signaling_thread="
                           << configuration_.unpublish_on_signaling_thread
                           << " transceivers=" << n_transceivers
@@ -1381,14 +1433,43 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
                           << " hit_index=" << hit_index
                           << " trackless_before_hit=" << trackless_before_hit
                           << " stopped_before_hit=" << stopped_before_hit
+                          << " hop_wait_us=" << hop_wait_us
+                          << " gettrans_us=" << gettrans_us
+                          << " walk_us=" << walk_us
                           << " remove_track_us=" << remove_track_us
-                          << " stop_us=" << stop_us;
+                          << " stop_us=" << stop_us
+                          << " body_us=" << body_us;
       };
-
-      for (const auto& track : media_stream->GetAudioTracks()) {
+      // GetAudioTracks() is a signaling proxy call returning a copied vector,
+      // so it is timed apart from the per-track work that follows.
+      const auto audio_loop_t0 = std::chrono::steady_clock::now();
+      const auto audio_tracks = media_stream->GetAudioTracks();
+      const auto audio_fetch_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - audio_loop_t0).count();
+      int audio_track_idx = 0;
+      for (const auto& track : audio_tracks) {
+        const auto audio_one_t0 = std::chrono::steady_clock::now();
+        const int track_idx = audio_track_idx++;
         if (hop) {
+          hop_t0 = std::chrono::steady_clock::now();
           signaling_thread->Invoke<void>(RTC_FROM_HERE, [&] { unpublish_track(track); });
-          log_unpublish();
+          const auto invoke_us =
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - hop_t0).count();
+          log_unpublish("audio");
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing drain_id=" << drain_id
+                            << " peerid=" << remote_id_
+                            << " stream_idx=" << stream_idx
+                            << " track_idx=" << track_idx
+                            << " kind=audio"
+                            << " on_signaling_thread=1"
+                            << " hop_wait_us=" << hop_wait_us
+                            << " body_us=" << body_us
+                            << " invoke_us=" << invoke_us
+                            << " total_us="
+                            << std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - audio_one_t0).count();
           continue;
         }
         const auto& transceivers = temp_pc_->GetTransceivers();
@@ -1401,15 +1482,43 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           }
         }
       }
-      for (const auto& track : media_stream->GetVideoTracks()) {
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_audio_loop_timing drain_id=" << drain_id
+                        << " peerid=" << remote_id_
+                        << " stream_idx=" << stream_idx
+                        << " tracks=" << audio_tracks.size()
+                        << " fetch_us=" << audio_fetch_us
+                        << " total_us="
+                        << std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - audio_loop_t0).count();
+
+      const auto video_loop_t0 = std::chrono::steady_clock::now();
+      const auto video_tracks = media_stream->GetVideoTracks();
+      const auto video_fetch_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - video_loop_t0).count();
+      int video_track_idx = 0;
+      for (const auto& track : video_tracks) {
         // Per track, both paths: the walk plus RemoveTrack and Stop, which mark
         // negotiation needed and so can run CreateOffer inline.
         const auto unpublish_one_t0 = std::chrono::steady_clock::now();
+        const int track_idx = video_track_idx++;
         if (hop) {
+          hop_t0 = std::chrono::steady_clock::now();
           signaling_thread->Invoke<void>(RTC_FROM_HERE, [&] { unpublish_track(track); });
-          log_unpublish();
-          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing peerid=" << remote_id_
-                            << " on_signaling_thread=1 total_us="
+          const auto invoke_us =
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - hop_t0).count();
+          log_unpublish("video");
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing drain_id=" << drain_id
+                            << " peerid=" << remote_id_
+                            << " stream_idx=" << stream_idx
+                            << " track_idx=" << track_idx
+                            << " kind=video"
+                            << " on_signaling_thread=1"
+                            << " hop_wait_us=" << hop_wait_us
+                            << " body_us=" << body_us
+                            << " invoke_us=" << invoke_us
+                            << " total_us="
                             << std::chrono::duration_cast<std::chrono::microseconds>(
                                    std::chrono::steady_clock::now() - unpublish_one_t0).count();
           continue;
@@ -1422,7 +1531,11 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
             temp_pc_->RemoveTrack(transceiver->sender());
             const auto stop_t0 = std::chrono::steady_clock::now();
             transceiver->Stop();
-            RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing peerid=" << remote_id_
+            RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing drain_id=" << drain_id
+                              << " peerid=" << remote_id_
+                              << " stream_idx=" << stream_idx
+                              << " track_idx=" << track_idx
+                              << " kind=video"
                               << " on_signaling_thread=0 transceivers=" << transceivers.size()
                               << " remove_track_us="
                               << std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1437,12 +1550,31 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           }
         }
       }
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_video_loop_timing drain_id=" << drain_id
+                        << " peerid=" << remote_id_
+                        << " stream_idx=" << stream_idx
+                        << " tracks=" << video_tracks.size()
+                        << " fetch_us=" << video_fetch_us
+                        << " total_us="
+                        << std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - video_loop_t0).count();
+      // Whole per-stream cost: setup + both track loops.
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_stream_timing drain_id=" << drain_id
+                        << " peerid=" << remote_id_
+                        << " stream_idx=" << stream_idx
+                        << " audio_tracks=" << audio_tracks.size()
+                        << " video_tracks=" << video_tracks.size()
+                        << " total_us="
+                        << std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - stream_t0).count();
     }
+
     unpublish_loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - unpublish_loop_t0).count();
   }
   // LS_ERROR so it survives the appliance's kError OWT log severity.
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_timing peerid=" << remote_id_
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_timing drain_id=" << drain_id
+                    << " peerid=" << remote_id_
                     << " publish_streams=" << publish_snapshot.size()
                     << " unpublish_streams=" << unpublish_snapshot.size()
                     << " publish_loop_us=" << publish_loop_us
