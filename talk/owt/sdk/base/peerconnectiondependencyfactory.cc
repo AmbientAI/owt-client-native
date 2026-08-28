@@ -279,6 +279,12 @@ scoped_refptr<webrtc::MediaStreamInterface>
 PeerConnectionDependencyFactory::CreateLocalMediaStream(
     const std::string& label) {
   RTC_CHECK(pc_thread_);
+  // pc_factory_ is a proxy: calling it only marshals
+  // PeerConnectionFactory::CreateLocalMediaStream onto signaling_thread and
+  // does nothing else, so the pc_thread_ hop is a redundant second queue.
+  if (GlobalConfiguration::GetSkipPcThreadForFactoryCallsEnabled()) {
+    return pc_factory_->CreateLocalMediaStream(label);
+  }
   return pc_thread_->Invoke<scoped_refptr<webrtc::MediaStreamInterface>>(
       RTC_FROM_HERE,
       Bind(&PeerConnectionFactoryInterface::CreateLocalMediaStream,
@@ -288,6 +294,12 @@ scoped_refptr<VideoTrackInterface>
 PeerConnectionDependencyFactory::CreateLocalVideoTrack(
     const std::string& id,
     webrtc::VideoTrackSourceInterface* video_source) {
+  // Same as CreateLocalMediaStream: the proxy only marshals
+  // PeerConnectionFactory::CreateVideoTrack onto signaling_thread and does
+  // nothing else, so the pc_thread_ hop is a redundant second queue.
+  if (GlobalConfiguration::GetSkipPcThreadForFactoryCallsEnabled()) {
+    return pc_factory_->CreateVideoTrack(id, video_source);
+  }
   return pc_thread_
       ->Invoke<scoped_refptr<VideoTrackInterface>>(
           RTC_FROM_HERE, Bind(&PeerConnectionFactoryInterface::CreateVideoTrack,

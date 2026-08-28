@@ -105,6 +105,20 @@ class GlobalConfiguration {
     return network_thread_realtime_enabled_;
   }
   /**
+   @brief Call CreateLocalMediaStream/CreateLocalVideoTrack on the factory proxy
+   directly instead of first hopping to pc_thread_.
+   */
+  static void SetSkipPcThreadForFactoryCallsEnabled(bool enabled) {
+    skip_pc_thread_for_factory_calls_enabled_ = enabled;
+  }
+  /**
+   @brief This function gets whether the pc_thread_ hop is bypassed.
+   @return true or false.
+   */
+  static bool GetSkipPcThreadForFactoryCallsEnabled() {
+    return skip_pc_thread_for_factory_calls_enabled_;
+  }
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -279,6 +293,7 @@ class GlobalConfiguration {
    * Default is false. If true, network_thread is promoted to SCHED_RR.
    */
   static bool network_thread_realtime_enabled_;
+  static bool skip_pc_thread_for_factory_calls_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not
