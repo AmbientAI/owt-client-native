@@ -13,6 +13,7 @@
 // TODO: Fix at binary level — configure OWT to emit LS_INFO or lower so log
 // levels here can be set correctly (LS_INFO for lifecycle events, LS_WARNING
 // for non-critical issues, LS_ERROR only for genuine failures).
+#include <chrono>
 #include <thread>
 #include <vector>
 #include <iostream>
@@ -1283,7 +1284,14 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         track_info[kTrackIdKey] = track->id();
         track_info[kTrackSourceKey] = video_track_source;
         track_sources.append(track_info);
+        // AddTrack marks negotiation needed, so it can run CreateOffer inline.
+        const auto add_track_t0 = std::chrono::steady_clock::now();
         temp_pc_->AddTrack(track, {stream_id});
+        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=add_track_timing peerid=" << remote_id_
+                          << " stream_id=" << stream_id
+                          << " total_us="
+                          << std::chrono::duration_cast<std::chrono::microseconds>(
+                                 std::chrono::steady_clock::now() - add_track_t0).count();
       }
       // The second signaling message of track sources to remote peer.
       Json::Value json_track_sources;
@@ -1320,6 +1328,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       size_t n_transceivers = 0;
       int scanned = 0, hit_index = -1;
       int trackless_before_hit = 0, stopped_before_hit = 0;
+      int64_t remove_track_us = 0, stop_us = 0;
 
       // Every step here is a signaling proxy call, so off-thread each one marshals.
       // Running unpublish_track() on signaling_thread makes the whole walk a single hop.
@@ -1330,6 +1339,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
             // than inheriting the previous track's hit.
             scanned = trackless_before_hit = stopped_before_hit = 0;
             hit_index = -1;
+            remove_track_us = stop_us = 0;
             const auto& transceivers = temp_pc_->GetTransceivers();
             n_transceivers = transceivers.size();
             int index = 0;
@@ -1343,8 +1353,14 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
               }
               if (ttrack != nullptr && ttrack->id() == track->id()) {
                 hit_index = index;
+                const auto remove_t0 = std::chrono::steady_clock::now();
                 temp_pc_->RemoveTrack(transceiver->sender());
+                const auto stop_t0 = std::chrono::steady_clock::now();
                 transceiver->Stop();
+                remove_track_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                      stop_t0 - remove_t0).count();
+                stop_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - stop_t0).count();
                 break;
               }
               ++index;
@@ -1364,7 +1380,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
                           << " scanned=" << scanned
                           << " hit_index=" << hit_index
                           << " trackless_before_hit=" << trackless_before_hit
-                          << " stopped_before_hit=" << stopped_before_hit;
+                          << " stopped_before_hit=" << stopped_before_hit
+                          << " remove_track_us=" << remove_track_us
+                          << " stop_us=" << stop_us;
       };
 
       for (const auto& track : media_stream->GetAudioTracks()) {
@@ -1384,17 +1402,37 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
         }
       }
       for (const auto& track : media_stream->GetVideoTracks()) {
+        // Per track, both paths: the walk plus RemoveTrack and Stop, which mark
+        // negotiation needed and so can run CreateOffer inline.
+        const auto unpublish_one_t0 = std::chrono::steady_clock::now();
         if (hop) {
           signaling_thread->Invoke<void>(RTC_FROM_HERE, [&] { unpublish_track(track); });
           log_unpublish();
+          RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing peerid=" << remote_id_
+                            << " on_signaling_thread=1 total_us="
+                            << std::chrono::duration_cast<std::chrono::microseconds>(
+                                   std::chrono::steady_clock::now() - unpublish_one_t0).count();
           continue;
         }
         const auto& transceivers = temp_pc_->GetTransceivers();
         for (auto& transceiver : transceivers) {
           const auto& ttrack = transceiver->sender()->track();
           if (ttrack != nullptr && ttrack->id() == track->id()) {
+            const auto remove_t0 = std::chrono::steady_clock::now();
             temp_pc_->RemoveTrack(transceiver->sender());
+            const auto stop_t0 = std::chrono::steady_clock::now();
             transceiver->Stop();
+            RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing peerid=" << remote_id_
+                              << " on_signaling_thread=0 transceivers=" << transceivers.size()
+                              << " remove_track_us="
+                              << std::chrono::duration_cast<std::chrono::microseconds>(
+                                     stop_t0 - remove_t0).count()
+                              << " stop_us="
+                              << std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now() - stop_t0).count()
+                              << " total_us="
+                              << std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now() - unpublish_one_t0).count();
             break;
           }
         }
