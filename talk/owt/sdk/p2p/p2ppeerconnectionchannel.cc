@@ -899,7 +899,17 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
           std::bind(
               &P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure,
               this, std::placeholders::_1));
+  // SetLocalDescription chains onto libwebrtc's per-connection operations
+  // chain: it runs inline when the chain is empty, otherwise it only enqueues.
+  // sld_call_us is therefore how long the call itself blocked, and the callback
+  // reports the wall time to completion -- the two together locate the wait.
+  sld_t0_ = std::chrono::steady_clock::now();
+  sld_pending_.store(true, std::memory_order_relaxed);
   peer_connection_->SetLocalDescription(observer);
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_local_call_timing peerid=" << remote_id_
+                    << " sld_call_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - sld_t0_).count();
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
     const std::string& error) {
@@ -908,8 +918,15 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
   Stop(nullptr, nullptr);
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
+  const auto cb_t0 = std::chrono::steady_clock::now();
+  const int64_t sld_total_us =
+      sld_pending_.exchange(false, std::memory_order_relaxed)
+          ? std::chrono::duration_cast<std::chrono::microseconds>(
+                cb_t0 - sld_t0_).count()
+          : -1;
   // LS_INFO (elevated to LS_ERROR — see file header note)
-  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_local_sdp_success peerid=" << remote_id_;
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_local_sdp_success peerid=" << remote_id_
+                    << " sld_total_us=" << sld_total_us;
   {
     std::lock_guard<std::mutex> lock(is_creating_offer_mutex_);
     is_creating_offer_ = false;
@@ -932,11 +949,29 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
   json[kMessageTypeKey] = kChatSignal;
   json[kMessageDataKey] = signal;
   // The fourth signaling message of SDP to remote peer.
+  const auto send_t0 = std::chrono::steady_clock::now();
   SendSignalingMessage(json);
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_local_cb_timing peerid=" << remote_id_
+                    << " sdp_bytes=" << sdp.size()
+                    << " send_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - send_t0).count()
+                    << " cb_total_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - cb_t0).count();
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure(
     const std::string& error) {
+  // Clear the flag here too: a SetLocalDescription that waits and then fails
+  // must not leave sld_pending_ set, or the next call's sld_total_us would be
+  // measured from this one's start.
+  const int64_t sld_total_us =
+      sld_pending_.exchange(false, std::memory_order_relaxed)
+          ? std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - sld_t0_).count()
+          : -1;
   RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=Set local sdp failed. peerid=" << remote_id_
+                   << " sld_total_us=" << sld_total_us
                    << " err=" << error;
   Stop(nullptr, nullptr);
 }
