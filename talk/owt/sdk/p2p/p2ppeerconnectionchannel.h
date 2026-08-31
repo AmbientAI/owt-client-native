@@ -74,7 +74,8 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   // Unpublish a local stream to remote user.
   void Unpublish(std::shared_ptr<LocalStream> stream,
                  std::function<void()> on_success,
-                 std::function<void(std::unique_ptr<Exception>)> on_failure);
+                 std::function<void(std::unique_ptr<Exception>)> on_failure,
+                 uint64_t stop_id = 0);
   // Send message to remote user.
   void Send(const std::string& message,
             std::function<void()> on_success,
@@ -205,6 +206,9 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   std::unordered_set<std::string> publishing_streams_;
   std::mutex pending_publish_streams_mutex_;
   std::mutex pending_unpublish_streams_mutex_;
+  // stop_id of the Stop() that queued the pending unpublishes; read with
+  // the snapshot in DrainPendingStreams. Guarded by the mutex above.
+  uint64_t pending_stop_id_ = 0;
   // Shared by |published_streams_| and |publishing_streams_|.
   std::mutex published_streams_mutex_;
   std::vector<P2PPeerConnectionChannelObserver*> observers_;
