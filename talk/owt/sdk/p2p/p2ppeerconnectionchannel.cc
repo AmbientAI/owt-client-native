@@ -174,6 +174,7 @@ void P2PPeerConnectionChannel::ClearPendingStreams() {
   {
     std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
     pending_unpublish_streams_.clear();
+    pending_unpublish_stop_ids_.clear();
   }
 }
 
@@ -1098,9 +1099,9 @@ void P2PPeerConnectionChannel::Unpublish(
     pending_lock_us = std::chrono::duration_cast<std::chrono::microseconds>(
                           std::chrono::steady_clock::now() - pending_t0).count();
     pending_unpublish_streams_.push_back(stream);
-    // The drain runs inline on this thread just below, so the id is picked up
-    // by that call. Guarded by the same mutex as the queue it describes.
-    pending_stop_id_ = stop_id;
+    // Kept in lockstep with the queue so a drain that takes N streams also takes
+    // their N ids.
+    pending_unpublish_stop_ids_.push_back(stop_id);
   }
   if (on_success) {
     on_success();
@@ -1290,16 +1291,30 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
   // lines below join to one drain without needing timestamps (RTC_LOG has none).
   static std::atomic<uint64_t> drain_seq{0};
   const uint64_t drain_id = drain_seq.fetch_add(1, std::memory_order_relaxed);
-  uint64_t stop_id = 0;
+  // One id per unpublished stream; drain-level events report the first, and
+  // per-stream events report their own.
+  std::vector<uint64_t> stop_id_snapshot;
   int64_t publish_loop_us = 0, unpublish_loop_us = 0;
+  // Entry region: everything before the loops. Two hangups were seen spending
+  // ~19.8s inside the drain with no per-stream span, which can only be here.
+  const auto entry_t0 = std::chrono::steady_clock::now();
   ChangeSessionState(kSessionStateConnecting);
+  const auto chgstate_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - entry_t0).count();
+  const auto pcref_t0 = std::chrono::steady_clock::now();
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  const auto pcref_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - pcref_t0).count();
   // Move contents of pending vectors to a temporary vector so
   // lock can be released before iterating over the streams.
   // First to publish the pending_publish_streams_ list.
   std::vector<std::shared_ptr<LocalStream>> publish_snapshot;
+  const auto publock_t0 = std::chrono::steady_clock::now();
+  int64_t publock_us = 0;
   {
     std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);
+    publock_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - publock_t0).count();
     for (auto it = pending_publish_streams_.begin();
          it != pending_publish_streams_.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
@@ -1309,18 +1324,34 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
   }
   // Then to unpublish the pending_unpublish_streams_ list.
   std::vector<std::shared_ptr<LocalStream>> unpublish_snapshot;
+  const auto unpublock_t0 = std::chrono::steady_clock::now();
+  int64_t unpublock_us = 0;
   {
     std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
+    unpublock_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::steady_clock::now() - unpublock_t0).count();
     for (auto it = pending_unpublish_streams_.begin();
          it != pending_unpublish_streams_.end(); ++it) {
       std::shared_ptr<LocalStream> stream = *it;
       unpublish_snapshot.push_back(stream);
     }
     pending_unpublish_streams_.clear();
-    // Taken with the snapshot: identifies the Stop() whose streams these are.
-    stop_id = pending_stop_id_;
-    pending_stop_id_ = 0;
+    // Taken with the snapshot and indexed the same way, so each stream reports
+    // the Stop() that queued it rather than whichever one happened to be last.
+    stop_id_snapshot = pending_unpublish_stop_ids_;
+    pending_unpublish_stop_ids_.clear();
   }
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_entry_timing drain_id=" << drain_id
+                    << " peerid=" << remote_id_
+                    << " chgstate_us=" << chgstate_us
+                    << " getpcref_us=" << pcref_us
+                    << " publish_lock_us=" << publock_us
+                    << " unpublish_lock_us=" << unpublock_us
+                    << " pub=" << publish_snapshot.size()
+                    << " unpub=" << unpublish_snapshot.size()
+                    << " total_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - entry_t0).count();
   // Snapshot vectors have no contention, safe to call webrtc methods.
   if (temp_pc_) {
     const auto publish_loop_t0 = std::chrono::steady_clock::now();
@@ -1400,7 +1431,8 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
                           std::chrono::steady_clock::now() - publish_loop_t0).count();
     const auto unpublish_loop_t0 = std::chrono::steady_clock::now();
     RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_loop_enter drain_id=" << drain_id
-                      << " stop_id=" << stop_id
+                      << " stop_id=" << (stop_id_snapshot.empty() ? 0 : stop_id_snapshot.front())
+                      << " stop_ids=" << stop_id_snapshot.size()
                       << " peerid=" << remote_id_
                       << " streams=" << unpublish_snapshot.size();
     int unpublish_stream_idx = 0;
@@ -1409,6 +1441,11 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       // SignalingThread() are both proxy calls that can marshal.
       const auto stream_t0 = std::chrono::steady_clock::now();
       const int stream_idx = unpublish_stream_idx++;
+      // This stream's own id, not the drain's: a drain can carry streams from
+      // several different Stop() calls.
+      const uint64_t stop_id =
+          (static_cast<size_t>(stream_idx) < stop_id_snapshot.size())
+              ? stop_id_snapshot[stream_idx] : 0;
       std::shared_ptr<LocalStream> stream = *it;
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
@@ -1677,7 +1714,8 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
   }
   // LS_ERROR so it survives the appliance's kError OWT log severity.
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_timing drain_id=" << drain_id
-                    << " stop_id=" << stop_id
+                    << " stop_id=" << (stop_id_snapshot.empty() ? 0 : stop_id_snapshot.front())
+                    << " stop_ids=" << stop_id_snapshot.size()
                     << " peerid=" << remote_id_
                     << " publish_streams=" << publish_snapshot.size()
                     << " unpublish_streams=" << unpublish_snapshot.size()
@@ -1720,6 +1758,7 @@ void P2PPeerConnectionChannel::ClosePeerConnection() {
     {
       std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
       pending_unpublish_streams_.clear();
+      pending_unpublish_stop_ids_.clear();
     }
     {
       std::lock_guard<std::mutex> lock(pending_publish_streams_mutex_);

@@ -207,9 +207,12 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   std::unordered_set<std::string> publishing_streams_;
   std::mutex pending_publish_streams_mutex_;
   std::mutex pending_unpublish_streams_mutex_;
-  // stop_id of the Stop() that queued the pending unpublishes; read with
-  // the snapshot in DrainPendingStreams. Guarded by the mutex above.
-  uint64_t pending_stop_id_ = 0;
+  // stop_id per queued unpublish, parallel to pending_unpublish_streams_ and
+  // guarded by the same mutex. A scalar does not work here: Unpublish pushes one
+  // stream and drains inline, so several Stop() calls can queue before a drain
+  // runs and consumes them together. A single slot keeps only the last id and
+  // every other drain reports 0.
+  std::vector<uint64_t> pending_unpublish_stop_ids_;
   // Stamped just before SetLocalDescription() and read in its success/failure
   // callback. sdp_created -> set_local_sdp_success reached 30s in production
   // with no span covering it: SetLocalDescription queues on libwebrtc's
