@@ -989,7 +989,10 @@ void P2PPeerConnectionChannel::Unpublish(
     std::shared_ptr<LocalStream> stream,
     std::function<void()> on_success,
     std::function<void(std::unique_ptr<Exception>)> on_failure) {
+  const auto unpublish_t0 = std::chrono::steady_clock::now();
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  const auto getpcref_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - unpublish_t0).count();
   if (!temp_pc_) {
     RTC_LOG(LS_INFO) << "Peer connection closed, returning.";
     // Skip on_success callback because technically we did not unpublish anything.
@@ -1019,9 +1022,22 @@ void P2PPeerConnectionChannel::Unpublish(
   // }
   RTC_CHECK(stream->MediaStream());
   // Calling MediaStream->id() runs on signaling_thread, so must be outside locks.
+  // That makes it a cross-thread Invoke from a pool worker: timed, because it
+  // blocks for as long as the signaling thread takes to pick the task up.
+  const auto mid_t0 = std::chrono::steady_clock::now();
   std::string stream_id = stream->MediaStream()->id();
+  const auto mediastream_id_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - mid_t0).count();
+  // trackid for joining to the appliance's remove_stream and to
+  // publication_stop_timing.
+  const std::string& unpublish_trackid = stream_id;
+  const auto pubmap_t0 = std::chrono::steady_clock::now();
+  int64_t pubmap_lock_us = 0;
   {
     std::lock_guard<std::mutex> lock(published_streams_mutex_);
+    pubmap_lock_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - pubmap_t0).count();
     auto it = published_streams_.find(stream_id);
     if (it == published_streams_.end()) {
       // if (on_failure) {
@@ -1039,14 +1055,36 @@ void P2PPeerConnectionChannel::Unpublish(
       published_streams_.erase(it);
     }
   }
+  const auto pending_t0 = std::chrono::steady_clock::now();
+  int64_t pending_lock_us = 0;
   {
     std::lock_guard<std::mutex> lock(pending_unpublish_streams_mutex_);
+    pending_lock_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          std::chrono::steady_clock::now() - pending_t0).count();
     pending_unpublish_streams_.push_back(stream);
   }
   if (on_success) {
     on_success();
   }
+  // Everything above is the pre-drain cost that sits between the appliance's
+  // stop_ms and drain_timing. Logged before the drain so the two are separable
+  // even when the drain is the slow part.
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_predrain_timing peerid=" << remote_id_
+                    << " trackid=" << unpublish_trackid
+                    << " getpcref_us=" << getpcref_us
+                    << " mediastream_id_us=" << mediastream_id_us
+                    << " pubmap_lock_us=" << pubmap_lock_us
+                    << " pending_lock_us=" << pending_lock_us
+                    << " total_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - unpublish_t0).count();
+  const auto drain_call_t0 = std::chrono::steady_clock::now();
   DrainPendingStreams();
+  RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_drain_call_timing peerid=" << remote_id_
+                    << " trackid=" << unpublish_trackid
+                    << " total_us="
+                    << std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - drain_call_t0).count();
 }
 void P2PPeerConnectionChannel::Stop(
     std::function<void()> on_success,
@@ -1331,6 +1369,9 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       const auto mediastream_us =
           std::chrono::duration_cast<std::chrono::microseconds>(
               std::chrono::steady_clock::now() - stream_t0).count();
+      // Same value the appliance logs as trackid on remove_stream: carried on
+      // every span below so a drain joins to the hangup that triggered it.
+      const std::string trackid = stream->Id();
       RTC_CHECK(temp_pc_);
       PeerConnectionDependencyFactory* dependency_factory =
           configuration_.unpublish_on_signaling_thread
@@ -1342,6 +1383,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       const bool hop = signaling_thread != nullptr && !signaling_thread->IsCurrent();
       RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_stream_setup drain_id=" << drain_id
                         << " peerid=" << remote_id_
+                        << " trackid=" << trackid
                         << " stream_idx=" << stream_idx
                         << " hop=" << hop
                         << " mediastream_us=" << mediastream_us
@@ -1424,6 +1466,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       auto log_unpublish = [&](const char* kind) {
         RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish drain_id=" << drain_id
                           << " peerid=" << remote_id_
+                          << " trackid=" << trackid
                           << " stream_idx=" << stream_idx
                           << " kind=" << kind
                           << " on_signaling_thread="
@@ -1460,6 +1503,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           log_unpublish("audio");
           RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing drain_id=" << drain_id
                             << " peerid=" << remote_id_
+                            << " trackid=" << trackid
                             << " stream_idx=" << stream_idx
                             << " track_idx=" << track_idx
                             << " kind=audio"
@@ -1484,6 +1528,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       }
       RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_audio_loop_timing drain_id=" << drain_id
                         << " peerid=" << remote_id_
+                        << " trackid=" << trackid
                         << " stream_idx=" << stream_idx
                         << " tracks=" << audio_tracks.size()
                         << " fetch_us=" << audio_fetch_us
@@ -1511,6 +1556,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           log_unpublish("video");
           RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing drain_id=" << drain_id
                             << " peerid=" << remote_id_
+                            << " trackid=" << trackid
                             << " stream_idx=" << stream_idx
                             << " track_idx=" << track_idx
                             << " kind=video"
@@ -1533,6 +1579,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
             transceiver->Stop();
             RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_track_timing drain_id=" << drain_id
                               << " peerid=" << remote_id_
+                              << " trackid=" << trackid
                               << " stream_idx=" << stream_idx
                               << " track_idx=" << track_idx
                               << " kind=video"
@@ -1552,6 +1599,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       }
       RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_video_loop_timing drain_id=" << drain_id
                         << " peerid=" << remote_id_
+                        << " trackid=" << trackid
                         << " stream_idx=" << stream_idx
                         << " tracks=" << video_tracks.size()
                         << " fetch_us=" << video_fetch_us
@@ -1561,6 +1609,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       // Whole per-stream cost: setup + both track loops.
       RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_stream_timing drain_id=" << drain_id
                         << " peerid=" << remote_id_
+                        << " trackid=" << trackid
                         << " stream_idx=" << stream_idx
                         << " audio_tracks=" << audio_tracks.size()
                         << " video_tracks=" << video_tracks.size()
