@@ -63,11 +63,8 @@ void P2PPublication::GetStats(
 
 /// Stop current publication.
 void P2PPublication::Stop() {
-  // stop_id is the join key for everything this teardown emits. trackid is not
-  // usable for that: the same stream is hung up more than once (retry, or a
-  // second hangup that finds nothing), so trackid collides across distinct
-  // Stop() calls and would merge them. stop_id is minted per call and is
-  // unique for the life of the process.
+  // Join key for everything this teardown emits. trackid collides across repeat hangups
+  // of the same stream; stop_id is minted per call and unique for the process.
   static std::atomic<uint64_t> stop_seq{0};
   const uint64_t stop_id = stop_seq.fetch_add(1, std::memory_order_relaxed);
   const auto stop_t0 = std::chrono::steady_clock::now();
@@ -85,9 +82,8 @@ void P2PPublication::Stop() {
                              std::chrono::steady_clock::now() - stop_t0).count();
     return;
   } else {
-    // The whole Unpublish call, which contains DrainPendingStreams. Subtracting
-    // drain_timing.total_us from this closes the gap between the appliance's
-    // stop_ms and the drain.
+    // The whole Unpublish call, containing DrainPendingStreams. Minus drain_timing
+    // closes the gap between the appliance's stop_ms and the drain.
     const auto unpub_t0 = std::chrono::steady_clock::now();
     that->Unpublish(target_id_, local_stream_, nullptr, nullptr, stop_id);
     const auto unpublish_us = std::chrono::duration_cast<std::chrono::microseconds>(

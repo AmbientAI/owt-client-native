@@ -15,9 +15,8 @@ namespace base {
 struct InFlightDispatch {
   /// "pc_thread", "signaling_thread", "worker_thread" or "network_thread".
   std::string thread_name;
-  /// OS thread id, for /proc/<tid>; 0 if the thread has not started. Reported whether or
-  /// not the thread is dispatching, because an idle thread's wchan is what separates
-  /// "waiting for work" from "blocked acquiring the queue lock".
+  /// OS thread id, for /proc/<tid>; 0 if the thread has not started. Reported even when
+  /// idle, since an idle thread's wchan distinguishes waiting from blocked.
   int32_t tid = 0;
   /// Milliseconds in the dispatch currently running; 0 when idle.
   int64_t elapsed_ms = 0;
@@ -27,23 +26,13 @@ struct InFlightDispatch {
   int posted_from_line = 0;
 };
 
-/**
- @brief Reads what libwebrtc's own threads are doing right now.
-
- libwebrtc logs "Message took Nms to dispatch", but only once a message COMPLETES, and
- Thread::Send never times its waiting side. A thread wedged inside a handler is therefore
- invisible to logging. This exposes the dispatch still running, so a watchdog can observe
- a wedge while it is happening and report the call site.
-*/
+/// Reads what libwebrtc's internal threads are doing right now. libwebrtc only logs a
+/// dispatch once it COMPLETES, so a thread wedged inside a handler is invisible to it;
+/// this exposes the dispatch still running.
 class ThreadDiagnostics final {
  public:
-  /**
-   @brief In-flight dispatch state of the internal threads.
-
-   Safe to call from any thread. Never constructs the peer-connection factory — returns
-   an empty vector if it does not already exist — so polling an idle node is inert.
-   Every live thread gets an entry; elapsed_ms == 0 means idle, not absent.
-   */
+  /// Safe from any thread. Never constructs the peer-connection factory, so polling an
+  /// idle node is inert. Every live thread gets an entry; elapsed_ms == 0 means idle.
   static std::vector<InFlightDispatch> InFlightDispatches();
 };
 

@@ -2,17 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// NOTE: Log severity — all [CONN-DIAG] logs in this file use RTC_LOG(LS_ERROR)
-// regardless of their actual severity. This is because the appliance binary sets
-// OWT log severity to kError (see main.cc: owt::base::Logging::Severity(kError)),
-// which silently drops LS_INFO and LS_WARNING. Informational lifecycle events
-// are logged at LS_ERROR purely to make them visible; they are not actual errors.
-// Lines marked "// LS_INFO (elevated to LS_ERROR — see file header note)" below
-// should be reverted to their correct severity once the binary-level fix is done.
-//
-// TODO: Fix at binary level — configure OWT to emit LS_INFO or lower so log
-// levels here can be set correctly (LS_INFO for lifecycle events, LS_WARNING
-// for non-critical issues, LS_ERROR only for genuine failures).
+// NOTE: [CONN-DIAG] logs use LS_ERROR regardless of real severity — the appliance sets
+// OWT severity to kError (main.cc), which drops LS_INFO/LS_WARNING.
+// TODO: allow LS_INFO at the binary level, then restore correct severities.
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -860,13 +852,9 @@ void P2PPeerConnectionChannel::OnIceCandidate(
   json[kMessageDataKey] = signal;
   SendSignalingMessage(json);
 }
-// AMBIENT: Fires when ICE nominates a candidate pair, and again whenever the
-// selected pair changes mid-call (e.g. srflx -> relay failover). This is the
-// only place that reports the path media is ACTUALLY using; GetConnectionStats
-// gives a snapshot, this gives the transitions. remote_id_ is the peerid.
-// Candidate::type() uses WebRTC internal names: local(host)/stun(srflx)/relay/prflx.
-// LS_ERROR (not LS_INFO): the appliance sets owt log severity to kError, so
-// INFO/WARNING are filtered out. Log at ERROR so this always emits.
+// AMBIENT: Fires on ICE pair nomination and on every mid-call change (e.g. srflx ->
+// relay). The only place reporting the path media ACTUALLY uses; GetConnectionStats is
+// a snapshot, this gives transitions. Candidate::type(): local/stun/relay/prflx.
 void P2PPeerConnectionChannel::OnIceSelectedCandidatePairChanged(
     const cricket::CandidatePairChangeEvent& event) {
   const cricket::Candidate& local = event.selected_candidate_pair.local;
@@ -900,10 +888,8 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
           std::bind(
               &P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure,
               this, std::placeholders::_1));
-  // SetLocalDescription chains onto libwebrtc's per-connection operations
-  // chain: it runs inline when the chain is empty, otherwise it only enqueues.
-  // sld_call_us is therefore how long the call itself blocked, and the callback
-  // reports the wall time to completion -- the two together locate the wait.
+  // SetLocalDescription runs inline when libwebrtc's operations chain is empty and only
+  // enqueues otherwise, so sld_call_us is the blocking part and the callback the total.
   sld_t0_ = std::chrono::steady_clock::now();
   sld_pending_.store(true, std::memory_order_relaxed);
   peer_connection_->SetLocalDescription(observer);
@@ -963,9 +949,8 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
 }
 void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure(
     const std::string& error) {
-  // Clear the flag here too: a SetLocalDescription that waits and then fails
-  // must not leave sld_pending_ set, or the next call's sld_total_us would be
-  // measured from this one's start.
+  // A failed SetLocalDescription must not leave sld_pending_ set, or the next call's
+  // sld_total_us would start from this one.
   const int64_t sld_total_us =
       sld_pending_.exchange(false, std::memory_order_relaxed)
           ? std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1058,9 +1043,8 @@ void P2PPeerConnectionChannel::Unpublish(
   //   return;
   // }
   RTC_CHECK(stream->MediaStream());
-  // Calling MediaStream->id() runs on signaling_thread, so must be outside locks.
-  // That makes it a cross-thread Invoke from a pool worker: timed, because it
-  // blocks for as long as the signaling thread takes to pick the task up.
+  // MediaStream->id() runs on signaling_thread, so it must be outside locks. That makes
+  // it a cross-thread Invoke: timed, because it blocks until the thread picks it up.
   const auto mid_t0 = std::chrono::steady_clock::now();
   std::string stream_id = stream->MediaStream()->id();
   const auto mediastream_id_us =
@@ -1106,9 +1090,8 @@ void P2PPeerConnectionChannel::Unpublish(
   if (on_success) {
     on_success();
   }
-  // Everything above is the pre-drain cost that sits between the appliance's
-  // stop_ms and drain_timing. Logged before the drain so the two are separable
-  // even when the drain is the slow part.
+  // Pre-drain cost between the appliance's stop_ms and drain_timing. Logged before the
+  // drain so the two stay separable.
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=unpublish_predrain_timing peerid=" << remote_id_
                     << " stop_id=" << stop_id
                     << " trackid=" << unpublish_trackid
@@ -1479,9 +1462,8 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       int scanned = 0, hit_index = -1;
       int trackless_before_hit = 0, stopped_before_hit = 0;
       int64_t remove_track_us = 0, stop_us = 0;
-      // Measured, not derived. hop_t0 is stamped immediately before Invoke() and
-      // read as the first statement inside the lambda, so hop_wait_us is the
-      // queue wait itself rather than a parent-minus-children remainder.
+      // Measured, not derived: hop_t0 is stamped before Invoke() and read first inside
+      // the lambda, so this is the queue wait itself.
       std::chrono::steady_clock::time_point hop_t0;
       int64_t hop_wait_us = 0, gettrans_us = 0, walk_us = 0, body_us = 0;
 

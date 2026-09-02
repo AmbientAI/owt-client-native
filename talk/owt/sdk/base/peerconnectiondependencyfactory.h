@@ -42,8 +42,7 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   // Get a PeerConnectionDependencyFactory instance. It doesn't create a new
   // instance. It always return the same instance.
   static PeerConnectionDependencyFactory* Get();
-  // The instance if it already exists, without creating one — Get() constructs on first
-  // call, which is wrong for a caller that only observes.
+  // The instance if it already exists; Get() would construct one.
   static PeerConnectionDependencyFactory* PeekExisting();
   // Lives here because the threads are private members; ThreadDiagnostics forwards.
   std::vector<InFlightDispatch> InFlightDispatches() const;
@@ -67,9 +66,8 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   // Returns current |pc_factory_|.
   rtc::scoped_refptr<PeerConnectionFactoryInterface> PeerConnectionFactory()
       const;
-  // The thread every PeerConnection proxy method marshals to. Exposed so a caller
-  // holding several proxy handles can do its work in one Invoke rather than one
-  // marshal per call.
+  // The thread every PeerConnection proxy method marshals to. Exposed so a caller can
+  // batch several proxy calls into one Invoke.
   rtc::Thread* SignalingThread() const { return signaling_thread.get(); }
   ~PeerConnectionDependencyFactory();
  protected:

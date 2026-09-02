@@ -59,8 +59,8 @@ PeerConnectionThread::~PeerConnectionThread() {
 rtc::scoped_refptr<PeerConnectionDependencyFactory>
     PeerConnectionDependencyFactory::dependency_factory_;
 std::once_flag get_pcdf_once;
-// Set after CreatePeerConnectionFactory() completes, so PeekExisting() never hands out a
-// factory whose threads are still being constructed.
+// Set after CreatePeerConnectionFactory() completes, so PeekExisting() never hands out
+// a half-built factory.
 std::atomic<bool> pcdf_ready{false};
 PeerConnectionDependencyFactory::PeerConnectionDependencyFactory()
     : pc_thread_(rtc::Thread::CreateWithSocketServer()),
@@ -94,9 +94,7 @@ PeerConnectionDependencyFactory::CreatePeerConnection(
       .get();
 }
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::PeekExisting() {
-  // Not merely non-null. Get() publishes dependency_factory_ before
-  // CreatePeerConnectionFactory() builds the threads, so a caller could otherwise observe
-  // a half-built factory and read signaling_thread while it is still being assigned.
+  // Not merely non-null: Get() publishes dependency_factory_ before the threads exist.
   if (!pcdf_ready.load(std::memory_order_acquire)) {
     return nullptr;
   }
@@ -107,9 +105,8 @@ std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatche
     const {
   std::vector<InFlightDispatch> out;
   const std::pair<const char*, rtc::Thread*> threads[] = {
-      // pc_thread_ first because it is the one that matters most: every
-      // CreateLocalMediaStream / CreateLocalVideoTrack / CreateLocalAudioTrack is a
-      // blocking Invoke onto it, so it is where a publishing caller waits.
+      // pc_thread_ first: every CreateLocal*Track is a blocking Invoke onto it, so it
+      // is where a publishing caller waits.
       {"pc_thread", pc_thread_.get()},
       {"signaling_thread", signaling_thread.get()},
       {"worker_thread", worker_thread.get()},
@@ -135,8 +132,7 @@ std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatche
 }
 
 std::vector<InFlightDispatch> ThreadDiagnostics::InFlightDispatches() {
-  // PeekExisting(), never Get(): Get() constructs the factory, so polling diagnostics
-  // through it would spin up libwebrtc on a node that never published anything.
+  // PeekExisting(), never Get(): Get() would spin up libwebrtc on an idle node.
   PeerConnectionDependencyFactory* factory =
       PeerConnectionDependencyFactory::PeekExisting();
   if (factory == nullptr) {
