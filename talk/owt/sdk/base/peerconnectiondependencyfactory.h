@@ -4,6 +4,10 @@
 #ifndef OWT_BASE_PEERCONNECTIONDEPENDENCYFACTORY_H_
 #define OWT_BASE_PEERCONNECTIONDEPENDENCYFACTORY_H_
 #include <mutex>
+#include <utility>
+#include <vector>
+
+#include "owt/base/threaddiagnostics.h"
 #include "webrtc/api/peer_connection_interface.h"
 #include "webrtc/api/media_stream_interface.h"
 #if defined(WEBRTC_WIN)
@@ -38,6 +42,11 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   // Get a PeerConnectionDependencyFactory instance. It doesn't create a new
   // instance. It always return the same instance.
   static PeerConnectionDependencyFactory* Get();
+  // The instance if it already exists, without creating one — Get() constructs on first
+  // call, which is wrong for a caller that only observes.
+  static PeerConnectionDependencyFactory* PeekExisting();
+  // Lives here because the threads are private members; ThreadDiagnostics forwards.
+  std::vector<InFlightDispatch> InFlightDispatches() const;
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> CreatePeerConnection(
       const webrtc::PeerConnectionInterface::RTCConfiguration& config,
       webrtc::PeerConnectionObserver* observer);

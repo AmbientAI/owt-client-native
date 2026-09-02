@@ -105,6 +105,7 @@ static_library("owt_sdk_base") {
     "sdk/include/cpp/owt/base/localcamerastreamparameters.h",
     "sdk/include/cpp/owt/base/logging.h",
     "sdk/include/cpp/owt/base/stream.h",
+    "sdk/include/cpp/owt/base/threaddiagnostics.h",
     "sdk/include/cpp/owt/base/videorendererinterface.h",
   ]
   if (is_win || is_linux) {
