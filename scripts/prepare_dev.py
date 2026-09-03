@@ -42,7 +42,9 @@ patchList = [
     ('0011-libjpeg_turbo-fix-for-CVE-2018-20330-and-19664.patch', LIBJPEG_TURBO_PATH),
     ('0013-Remove-unused-gni-for-av1-build.patch', THIRD_PARTY_PATH),
     ('0014-Fix-missing-ffmpeg-configure-item-for-msvc-build.patch', FFMPEG_PATH),
-    ('0016-Publish-in-flight-dispatch-state-on-rtc-Thread.patch', WEBRTC_PATH)
+    ('0016-Publish-in-flight-dispatch-state-on-rtc-Thread.patch', WEBRTC_PATH),
+    ('0017-Time-the-SDP-observer-paths.patch', WEBRTC_PATH),
+    ('0018-Report-operations-chain-cascades.patch', WEBRTC_PATH)
 ]
 
 def _patch(ignoreFailures=False):
