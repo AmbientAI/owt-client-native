@@ -1,0 +1,25 @@
+From: Ambient <eng@ambient.ai>
+Date: Thu, 4 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Drop the legacy stats sweep from ApplyLocalDescription
+
+Same sweep, same reader: a legacy getStats(), which runs its own UpdateStats on
+call. Measured 32.5% of ApplyLocalDescription, 1,047 ms worst.
+
+---
+diff -ruN a/pc/peer_connection.cc b/pc/peer_connection.cc
+--- a/pc/peer_connection.cc	2026-09-04 15:21:17.639840450 +0000
++++ b/pc/peer_connection.cc	2026-09-04 15:21:18.053254786 +0000
+@@ -2643,9 +2643,8 @@
+   RTC_DCHECK_RUN_ON(signaling_thread());
+   RTC_DCHECK(desc);
+ 
+-  // Update stats here so that we have the most recent stats for tracks and
+-  // streams that might be removed by updating the session description.
+-  stats_->UpdateStats(kStatsOutputLevelStandard);
++  // Legacy stats sweep removed: the only reader is a legacy getStats(), which runs
++  // its own UpdateStats on call.
+ 
+   // Take a reference to the old local description since it's used below to
+   // compare against the new local description. When setting the new local
+--
+2.34.1
