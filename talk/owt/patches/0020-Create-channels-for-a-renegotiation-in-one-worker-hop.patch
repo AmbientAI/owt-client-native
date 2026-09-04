@@ -1,0 +1,191 @@
+From: Ambient <eng@ambient.ai>
+Date: Thu, 4 Sep 2026 00:00:00 +0000
+Subject: [PATCH] Create channels for a renegotiation in one worker hop
+
+ChannelManager::Create*Channel hops per new m-line. Defer the creations, prep and
+wire them on the signaling thread, and make one hop for the Create* calls only.
+
+---
+diff -ruN a/pc/peer_connection.cc b/pc/peer_connection.cc
+--- a/pc/peer_connection.cc	2026-09-04 19:41:15.650542795 +0000
++++ b/pc/peer_connection.cc	2026-09-04 19:41:15.683622212 +0000
+@@ -3512,6 +3512,9 @@
+     bundle_group = bundle_group_or_error.MoveValue();
+   }
+ 
++  // Built in one worker hop after the loop.
++  std::vector<PendingChannelCreate> deferred_creates;
++
+   const ContentInfos& new_contents = new_session.description()->contents();
+   for (size_t i = 0; i < new_contents.size(); ++i) {
+     const cricket::ContentInfo& new_content = new_contents[i];
+@@ -3535,12 +3538,14 @@
+           AssociateTransceiver(source, new_session.GetType(), i, new_content,
+                                old_local_content, old_remote_content);
+       if (!transceiver_or_error.ok()) {
++        FlushPendingChannelCreates(&deferred_creates).ok();
+         return transceiver_or_error.MoveError();
+       }
+       auto transceiver = transceiver_or_error.MoveValue();
+-      RTCError error =
+-          UpdateTransceiverChannel(transceiver, new_content, bundle_group);
++      RTCError error = UpdateTransceiverChannel(transceiver, new_content,
++                                                bundle_group, &deferred_creates);
+       if (!error.ok()) {
++        FlushPendingChannelCreates(&deferred_creates).ok();
+         return error;
+       }
+     } else if (media_type == cricket::MEDIA_TYPE_DATA) {
+@@ -3552,14 +3557,86 @@
+       }
+       RTCError error = UpdateDataChannel(source, new_content, bundle_group);
+       if (!error.ok()) {
++        FlushPendingChannelCreates(&deferred_creates).ok();
+         return error;
+       }
+     } else {
++      FlushPendingChannelCreates(&deferred_creates).ok();
+       LOG_AND_RETURN_ERROR(RTCErrorType::INTERNAL_ERROR,
+                            "Unknown section type.");
+     }
+   }
+ 
++  return FlushPendingChannelCreates(&deferred_creates);
++}
++
++// Called on the error paths too, so the channels queued before the failure are still
++// created -- matching the inline behaviour this replaced. Its own error is discarded
++// there because the caller is already returning an earlier, more specific one.
++// Prep and wiring stay on the signaling thread -- GetRtpTransport and
++// GetMediaTransportConfig are guarded by it. Only the ChannelManager::Create* calls,
++// which would otherwise hop once per channel, move into a single worker hop.
++RTCError PeerConnection::FlushPendingChannelCreates(
++    std::vector<PendingChannelCreate>* pending) {
++  if (pending->empty()) {
++    return RTCError::OK();
++  }
++
++  const size_t count = pending->size();
++  std::vector<RtpTransportInternal*> transports(count);
++  std::vector<MediaTransportConfig> configs(count);
++  for (size_t i = 0; i < count; ++i) {
++    transports[i] = GetRtpTransport((*pending)[i].mid);
++    configs[i] = transport_controller_->GetMediaTransportConfig(
++        (*pending)[i].mid);
++  }
++
++  std::vector<cricket::ChannelInterface*> created(count, nullptr);
++  cricket::ChannelManager* cm = channel_manager();
++  webrtc::Call* call = call_ptr_;
++  const cricket::MediaConfig& media_config = configuration_.media_config;
++  rtc::Thread* signaling = signaling_thread();
++  const bool srtp_required = SrtpRequired();
++  const webrtc::CryptoOptions crypto_options = GetCryptoOptions();
++  worker_thread()->Invoke<void>(RTC_FROM_HERE, [&] {
++    for (size_t i = 0; i < count; ++i) {
++      const PendingChannelCreate& p = (*pending)[i];
++      if (p.media_type == cricket::MEDIA_TYPE_AUDIO) {
++        created[i] = cm->CreateVoiceChannel(
++            call, media_config, transports[i], configs[i], signaling, p.mid,
++            srtp_required, crypto_options, &ssrc_generator_, audio_options_);
++      } else {
++        created[i] = cm->CreateVideoChannel(
++            call, media_config, transports[i], configs[i], signaling, p.mid,
++            srtp_required, crypto_options, &ssrc_generator_, video_options_,
++            video_bitrate_allocator_factory_.get());
++      }
++    }
++  });
++
++  for (size_t i = 0; i < count; ++i) {
++    const PendingChannelCreate& p = (*pending)[i];
++    if (!created[i]) {
++      LOG_AND_RETURN_ERROR(RTCErrorType::INTERNAL_ERROR,
++                           "Failed to create channel for mid=" + p.mid);
++    }
++    if (p.media_type == cricket::MEDIA_TYPE_AUDIO) {
++      auto* ch = static_cast<cricket::VoiceChannel*>(created[i]);
++      ch->SignalDtlsSrtpSetupFailure.connect(
++          this, &PeerConnection::OnDtlsSrtpSetupFailure);
++      ch->SignalSentPacket.connect(this, &PeerConnection::OnSentPacket_w);
++      ch->SetRtpTransport(transports[i]);
++    } else {
++      auto* ch = static_cast<cricket::VideoChannel*>(created[i]);
++      ch->SignalDtlsSrtpSetupFailure.connect(
++          this, &PeerConnection::OnDtlsSrtpSetupFailure);
++      ch->SignalSentPacket.connect(this, &PeerConnection::OnSentPacket_w);
++      ch->SetRtpTransport(transports[i]);
++    }
++    p.transceiver->internal()->SetChannel(created[i]);
++  }
++
++  pending->clear();
+   return RTCError::OK();
+ }
+ 
+@@ -3567,7 +3644,9 @@
+     rtc::scoped_refptr<RtpTransceiverProxyWithInternal<RtpTransceiver>>
+         transceiver,
+     const cricket::ContentInfo& content,
+-    const cricket::ContentGroup* bundle_group) {
++    const cricket::ContentGroup* bundle_group,
++    std::vector<PendingChannelCreate>* deferred) {
++  RTC_DCHECK(deferred);
+   RTC_DCHECK(IsUnifiedPlan());
+   RTC_DCHECK(transceiver);
+   cricket::ChannelInterface* channel = transceiver->internal()->channel();
+@@ -3578,18 +3657,10 @@
+     }
+   } else {
+     if (!channel) {
+-      if (transceiver->media_type() == cricket::MEDIA_TYPE_AUDIO) {
+-        channel = CreateVoiceChannel(content.name);
+-      } else {
+-        RTC_DCHECK_EQ(cricket::MEDIA_TYPE_VIDEO, transceiver->media_type());
+-        channel = CreateVideoChannel(content.name);
+-      }
+-      if (!channel) {
+-        LOG_AND_RETURN_ERROR(
+-            RTCErrorType::INTERNAL_ERROR,
+-            "Failed to create channel for mid=" + content.name);
+-      }
+-      transceiver->internal()->SetChannel(channel);
++      // Creation hops to the worker per m-line; record it and let the caller
++      // build the whole batch in one hop.
++      deferred->push_back(
++          {transceiver, content.name, transceiver->media_type()});
+     }
+   }
+   return RTCError::OK();
+diff -ruN a/pc/peer_connection.h b/pc/peer_connection.h
+--- a/pc/peer_connection.h	2026-09-04 19:41:15.655542792 +0000
++++ b/pc/peer_connection.h	2026-09-04 19:41:15.675320021 +0000
+@@ -627,11 +627,25 @@
+ 
+   // Either creates or destroys the transceiver's BaseChannel according to the
+   // given media section.
++  // A channel creation deferred so a renegotiation's worth builds in one hop.
++  struct PendingChannelCreate {
++    rtc::scoped_refptr<RtpTransceiverProxyWithInternal<RtpTransceiver>>
++        transceiver;
++    std::string mid;
++    cricket::MediaType media_type;
++  };
++
+   RTCError UpdateTransceiverChannel(
+       rtc::scoped_refptr<RtpTransceiverProxyWithInternal<RtpTransceiver>>
+           transceiver,
+       const cricket::ContentInfo& content,
+-      const cricket::ContentGroup* bundle_group) RTC_RUN_ON(signaling_thread());
++      const cricket::ContentGroup* bundle_group,
++      std::vector<PendingChannelCreate>* deferred)
++      RTC_RUN_ON(signaling_thread());
++
++  RTCError FlushPendingChannelCreates(
++      std::vector<PendingChannelCreate>* pending)
++      RTC_RUN_ON(signaling_thread());
+ 
+   // Either creates or destroys the local data channel according to the given
+   // media section.
+--
+2.34.1
