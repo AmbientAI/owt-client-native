@@ -44,7 +44,8 @@ patchList = [
     ('0014-Fix-missing-ffmpeg-configure-item-for-msvc-build.patch', FFMPEG_PATH),
     ('0016-Publish-in-flight-dispatch-state-on-rtc-Thread.patch', WEBRTC_PATH),
     ('0017-Time-the-SDP-observer-paths.patch', WEBRTC_PATH),
-    ('0018-Report-operations-chain-cascades.patch', WEBRTC_PATH)
+    ('0018-Report-operations-chain-cascades.patch', WEBRTC_PATH),
+    ('0019-Break-down-DoSetLocalDescription-and-Close-into-phases.patch', WEBRTC_PATH)
 ]
 
 def _patch(ignoreFailures=False):
