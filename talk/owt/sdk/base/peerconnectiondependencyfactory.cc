@@ -6,6 +6,8 @@
 #include "talk/owt/sdk/base/customizedaudiodevicemodule.h"
 #endif
 #include "talk/owt/sdk/base/encodedvideoencoderfactory.h"
+#include <atomic>
+
 #include "talk/owt/sdk/base/peerconnectiondependencyfactory.h"
 #include "webrtc/api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "webrtc/api/audio_codecs/builtin_audio_encoder_factory.h"
@@ -57,6 +59,9 @@ PeerConnectionThread::~PeerConnectionThread() {
 rtc::scoped_refptr<PeerConnectionDependencyFactory>
     PeerConnectionDependencyFactory::dependency_factory_;
 std::once_flag get_pcdf_once;
+// Set after CreatePeerConnectionFactory() completes, so PeekExisting() never hands out
+// a half-built factory.
+std::atomic<bool> pcdf_ready{false};
 PeerConnectionDependencyFactory::PeerConnectionDependencyFactory()
     : pc_thread_(rtc::Thread::CreateWithSocketServer()),
       callback_thread_(rtc::Thread::CreateWithSocketServer()),
@@ -88,11 +93,61 @@ PeerConnectionDependencyFactory::CreatePeerConnection(
                               this, config, observer))
       .get();
 }
+PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::PeekExisting() {
+  // Not merely non-null: Get() publishes dependency_factory_ before the threads exist.
+  if (!pcdf_ready.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
+  return dependency_factory_.get();
+}
+
+std::vector<InFlightDispatch> PeerConnectionDependencyFactory::InFlightDispatches()
+    const {
+  std::vector<InFlightDispatch> out;
+  const std::pair<const char*, rtc::Thread*> threads[] = {
+      // pc_thread_ first: every CreateLocal*Track is a blocking Invoke onto it, so it
+      // is where a publishing caller waits.
+      {"pc_thread", pc_thread_.get()},
+      {"signaling_thread", signaling_thread.get()},
+      {"worker_thread", worker_thread.get()},
+      {"network_thread", network_thread.get()},
+  };
+  for (const auto& entry : threads) {
+    if (entry.second == nullptr) {
+      continue;
+    }
+    InFlightDispatch info;
+    info.thread_name = entry.first;
+    info.tid = static_cast<int32_t>(entry.second->os_thread_id());
+    const char* file = nullptr;
+    int line = 0;
+    info.elapsed_ms = entry.second->CurrentDispatchElapsedMs(&file, &line);
+    if (info.elapsed_ms > 0 && file != nullptr) {
+      info.posted_from_file = file;
+      info.posted_from_line = line;
+    }
+    out.push_back(std::move(info));
+  }
+  return out;
+}
+
+std::vector<InFlightDispatch> ThreadDiagnostics::InFlightDispatches() {
+  // PeekExisting(), never Get(): Get() would spin up libwebrtc on an idle node.
+  PeerConnectionDependencyFactory* factory =
+      PeerConnectionDependencyFactory::PeekExisting();
+  if (factory == nullptr) {
+    return std::vector<InFlightDispatch>();
+  }
+  return factory->InFlightDispatches();
+}
+
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::Get() {
   std::call_once(get_pcdf_once, []() {
     dependency_factory_ =
         new rtc::RefCountedObject<PeerConnectionDependencyFactory>();
     dependency_factory_->CreatePeerConnectionFactory();
+    // Publish only once the threads exist; see PeekExisting().
+    pcdf_ready.store(true, std::memory_order_release);
   });
   return dependency_factory_.get();
 }

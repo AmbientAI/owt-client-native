@@ -232,10 +232,13 @@ class P2PClient final
   virtual void OnStreamAdded(
       std::shared_ptr<owt::base::RemoteStream> stream);
  private:
+  /// |stop_id| correlates the CONN-DIAG spans this teardown emits. Defaulted so
+  /// existing callers are unaffected; 0 means "not part of a traced Stop()".
   void Unpublish(const std::string& target_id,
                  std::shared_ptr<LocalStream> stream,
                  std::function<void()> on_success,
-                 std::function<void(std::unique_ptr<Exception>)> on_failure);
+                 std::function<void(std::unique_ptr<Exception>)> on_failure,
+                 uint64_t stop_id = 0);
   std::shared_ptr<P2PPeerConnectionChannel> GetPeerConnectionChannel(
       const std::string& target_id);
   bool IsPeerConnectionChannelCreated(const std::string& target_id);

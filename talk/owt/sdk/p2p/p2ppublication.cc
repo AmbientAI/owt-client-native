@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include "webrtc/rtc_base/third_party/base64/base64.h"
 #include "webrtc/rtc_base/critical_section.h"
 #include "webrtc/rtc_base/logging.h"
@@ -61,15 +63,54 @@ void P2PPublication::GetStats(
 
 /// Stop current publication.
 void P2PPublication::Stop() {
+  // Join key for everything this teardown emits. trackid collides across repeat hangups
+  // of the same stream; stop_id is minted per call and unique for the process.
+  static std::atomic<uint64_t> stop_seq{0};
+  const uint64_t stop_id = stop_seq.fetch_add(1, std::memory_order_relaxed);
+  const auto stop_t0 = std::chrono::steady_clock::now();
+  const std::string trackid = local_stream_ ? local_stream_->Id() : std::string();
   auto that = p2p_client_.lock();
+  const auto lock_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                           std::chrono::steady_clock::now() - stop_t0).count();
   if (that == nullptr || ended_) {
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=publication_stop_timing peerid=" << target_id_
+                      << " stop_id=" << stop_id
+                      << " trackid=" << trackid
+                      << " early_out=1 client_lock_us=" << lock_us
+                      << " unpublish_us=0 onended_us=0 total_us="
+                      << std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - stop_t0).count();
     return;
   } else {
-    that->Unpublish(target_id_, local_stream_, nullptr, nullptr);
+    // The whole Unpublish call, containing DrainPendingStreams. Minus drain_timing
+    // closes the gap between the appliance's stop_ms and the drain.
+    const auto unpub_t0 = std::chrono::steady_clock::now();
+    that->Unpublish(target_id_, local_stream_, nullptr, nullptr, stop_id);
+    const auto unpublish_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - unpub_t0).count();
     ended_ = true;
-    const std::lock_guard<std::mutex> lock(observer_mutex_);
-    for (auto its = observers_.begin(); its != observers_.end(); ++its)
-      (*its).get().OnEnded();
+    // Runs after the drain, still inside the appliance's stop_ms. Observer
+    // callbacks are arbitrary code, so they are timed rather than assumed cheap.
+    const auto onended_t0 = std::chrono::steady_clock::now();
+    size_t n_observers = 0;
+    {
+      const std::lock_guard<std::mutex> lock(observer_mutex_);
+      n_observers = observers_.size();
+      for (auto its = observers_.begin(); its != observers_.end(); ++its)
+        (*its).get().OnEnded();
+    }
+    const auto onended_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() - onended_t0).count();
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=publication_stop_timing peerid=" << target_id_
+                      << " stop_id=" << stop_id
+                      << " trackid=" << trackid
+                      << " early_out=0 client_lock_us=" << lock_us
+                      << " unpublish_us=" << unpublish_us
+                      << " observers=" << n_observers
+                      << " onended_us=" << onended_us
+                      << " total_us="
+                      << std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - stop_t0).count();
   }
 }
 void P2PPublication::AddObserver(PublicationObserver& observer) {
