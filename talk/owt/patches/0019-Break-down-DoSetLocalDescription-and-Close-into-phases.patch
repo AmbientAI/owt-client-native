@@ -1,27 +1,26 @@
-From b7367ddf0db0e9f28cb3fec94c31ebdc3bd14ba8 Mon Sep 17 00:00:00 2001
+From 7d0ca2c7b7ac0f02a505d7ce3be2028b227b132d Mon Sep 17 00:00:00 2001
 From: ambient <dev@ambient.ai>
-Date: Fri, 4 Sep 2026 06:34:50 +0000
-Subject: Break down DoSetLocalDescription and Close into phases
+Date: Fri, 4 Sep 2026 06:53:14 +0000
+Subject: Break down DoSetLocalDescription, Close and AddTrack into phases
 
-Both hold the signalling thread for their whole duration and are the two largest
-dispatches observed: DoSetLocalDescription up to 19s, Close up to 10s. slow_dispatch
-names them but not what inside them is slow.
+These three are the largest signalling-thread dispatches observed: AddTrack up to 48s
+(on-CPU), DoSetLocalDescription up to 19s and Close up to 10s. slow_dispatch names them
+but not what inside them is slow.
 
-DoSetLocalDescription splits into validate / apply / gather / discard_pool /
-renegotiation. Close splits into update_stats / stop_transceivers / wait_stats /
-destroy_channels / reset_transport / network_invoke / worker_invoke, which separates
-the two blocking Invokes from the work proportional to transceiver count.
-
-Both lines carry m_lines and transceivers, which are expected to match.
+Each is split into its constituent stages, separating the blocking Invokes onto the
+network and worker threads from the work that scales with transceiver count. Every line
+carries transceivers, and the SLD and Close lines carry m_lines, which are expected to
+match.
 ---
- pc/peer_connection.cc | 85 +++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 85 insertions(+)
+ pc/peer_connection.cc | 114 ++++++++++++++++++++++++++++++++++++++++++
+ rtc_base/thread.cc    |   1 +
+ 2 files changed, 115 insertions(+)
 
 diff --git a/pc/peer_connection.cc b/pc/peer_connection.cc
-index 01b3e8bc5f..e0b57a1e5a 100644
+index 01b3e8bc5f..e6be279bcf 100644
 --- a/pc/peer_connection.cc
 +++ b/pc/peer_connection.cc
-@@ -648,6 +648,10 @@ const ContentInfo* FindTransceiverMSection(
+@@ -648,6 +648,12 @@ const ContentInfo* FindTransceiverMSection(
  
  // Above this, the chain drain and the wrapped observer are each logged.
  constexpr int64_t kOperationWrapperLogThresholdMs = 1000;
@@ -29,10 +28,57 @@ index 01b3e8bc5f..e0b57a1e5a 100644
 +constexpr int64_t kSlowCloseLogThresholdMs = 1000;
 +// DoSetLocalDescription is the largest dispatch seen; report anything past this.
 +constexpr int64_t kSlowSetLocalDescriptionMs = 1000;
++// AddTrack walks senders and transceivers; report anything past this.
++constexpr int64_t kSlowAddTrackMs = 1000;
  
  // Wraps a CreateSessionDescriptionObserver and an OperationsChain operation
  // complete callback. When the observer is invoked, the wrapped observer is
-@@ -2634,7 +2638,16 @@ void PeerConnection::DoSetLocalDescription(
+@@ -1583,17 +1589,44 @@ RTCErrorOr<rtc::scoped_refptr<RtpSenderInterface>> PeerConnection::AddTrack(
+     LOG_AND_RETURN_ERROR(RTCErrorType::INVALID_STATE,
+                          "PeerConnection is closed.");
+   }
++  // AddTrack has been observed holding the signalling thread for 48s while on-CPU
++  // rather than blocked, so the stages that walk senders/transceivers are timed
++  // separately from the ones that do not.
++  const int64_t at_t0 = rtc::TimeMillis();
++  const size_t at_transceivers = transceivers_.size();
++
+   if (FindSenderForTrack(track)) {
+     LOG_AND_RETURN_ERROR(
+         RTCErrorType::INVALID_PARAMETER,
+         "Sender already exists for track " + track->id() + ".");
+   }
++  const int64_t at_t_find = rtc::TimeMillis();
++
+   auto sender_or_error =
+       (IsUnifiedPlan() ? AddTrackUnifiedPlan(track, stream_ids)
+                        : AddTrackPlanB(track, stream_ids));
++  const int64_t at_t_add = rtc::TimeMillis();
++
++  int64_t at_t_reneg = at_t_add;
++  int64_t at_t_stats = at_t_add;
+   if (sender_or_error.ok()) {
+     UpdateNegotiationNeeded();
++    at_t_reneg = rtc::TimeMillis();
+     stats_->AddTrack(track);
++    at_t_stats = rtc::TimeMillis();
++  }
++
++  const int64_t at_total = at_t_stats - at_t0;
++  if (at_total >= kSlowAddTrackMs) {
++    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=add_track_phases"
++                      << " handler=" << static_cast<const void*>(this)
++                      << " total_ms=" << at_total
++                      << " find_sender_ms=" << (at_t_find - at_t0)
++                      << " add_track_ms=" << (at_t_add - at_t_find)
++                      << " renegotiation_ms=" << (at_t_reneg - at_t_add)
++                      << " stats_add_ms=" << (at_t_stats - at_t_reneg)
++                      << " transceivers=" << at_transceivers
++                      << " kind=" << track->kind();
+   }
+   return sender_or_error;
+ }
+@@ -2634,7 +2667,16 @@ void PeerConnection::DoSetLocalDescription(
      return;
    }
  
@@ -49,7 +95,7 @@ index 01b3e8bc5f..e0b57a1e5a 100644
    if (!error.ok()) {
      std::string error_message = GetSetDescriptionErrorMessage(
          cricket::CS_LOCAL, desc->GetType(), error);
-@@ -2650,6 +2663,7 @@ void PeerConnection::DoSetLocalDescription(
+@@ -2650,6 +2692,7 @@ void PeerConnection::DoSetLocalDescription(
    const SdpType type = desc->GetType();
  
    error = ApplyLocalDescription(std::move(desc));
@@ -57,7 +103,7 @@ index 01b3e8bc5f..e0b57a1e5a 100644
    // |desc| may be destroyed at this point.
  
    if (!error.ok()) {
-@@ -2673,6 +2687,7 @@ void PeerConnection::DoSetLocalDescription(
+@@ -2673,6 +2716,7 @@ void PeerConnection::DoSetLocalDescription(
    // MSG_SET_SESSIONDESCRIPTION_SUCCESS, so that we don't signal any candidates
    // before signaling that SetLocalDescription completed.
    transport_controller_->MaybeStartGathering();
@@ -65,7 +111,7 @@ index 01b3e8bc5f..e0b57a1e5a 100644
  
    if (local_description()->GetType() == SdpType::kAnswer) {
      // TODO(deadbeef): We already had to hop to the network thread for
-@@ -2683,15 +2698,34 @@ void PeerConnection::DoSetLocalDescription(
+@@ -2683,15 +2727,34 @@ void PeerConnection::DoSetLocalDescription(
      // Make UMA notes about what was agreed to.
      ReportNegotiatedSdpSemantics(*local_description());
    }
@@ -100,7 +146,7 @@ index 01b3e8bc5f..e0b57a1e5a 100644
  
    NoteUsageEvent(UsageEvent::SET_LOCAL_DESCRIPTION_SUCCEEDED);
  }
-@@ -4488,26 +4522,49 @@ const SessionDescriptionInterface* PeerConnection::pending_remote_description()
+@@ -4488,26 +4551,49 @@ const SessionDescriptionInterface* PeerConnection::pending_remote_description()
  void PeerConnection::Close() {
    RTC_DCHECK_RUN_ON(signaling_thread());
    TRACE_EVENT0("webrtc", "PeerConnection::Close");
@@ -150,7 +196,7 @@ index 01b3e8bc5f..e0b57a1e5a 100644
  
    // The event log is used in the transport controller, which must be outlived
    // by the former. CreateOffer by the peer connection is implemented
-@@ -4516,10 +4573,12 @@ void PeerConnection::Close() {
+@@ -4516,10 +4602,12 @@ void PeerConnection::Close() {
    // call the transport controller.
    webrtc_session_desc_factory_.reset();
    transport_controller_.reset();
@@ -163,7 +209,7 @@ index 01b3e8bc5f..e0b57a1e5a 100644
  
    worker_thread()->Invoke<void>(RTC_FROM_HERE, [this] {
      RTC_DCHECK_RUN_ON(worker_thread());
-@@ -4527,7 +4586,33 @@ void PeerConnection::Close() {
+@@ -4527,7 +4615,33 @@ void PeerConnection::Close() {
      // The event log must outlive call (and any other object that uses it).
      event_log_.reset();
    });
@@ -197,6 +243,18 @@ index 01b3e8bc5f..e0b57a1e5a 100644
    // The .h file says that observer can be discarded after close() returns.
    // Make sure this is true.
    observer_ = nullptr;
+diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
+index f3d5b68672..fd3e781b3c 100644
+--- a/rtc_base/thread.cc
++++ b/rtc_base/thread.cc
+@@ -697,6 +697,7 @@ void Thread::Dispatch(Message* pmsg) {
+                       << " dispatch_ms=" << diff
+                       << " message_id=" << pmsg->message_id
+                       << " handler=" << static_cast<const void*>(pmsg->phandler)
++                      << " thread=" << (name_.empty() ? "unnamed" : name_)
+                       << " tid=" << tid_.load(std::memory_order_relaxed)
+                       << " function=" << pmsg->posted_from.function_name()
+                       << " posted_from=" << pmsg->posted_from.file_name() << ":"
 -- 
 2.25.1
 
