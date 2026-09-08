@@ -1,0 +1,3 @@
+[submodule "libwebrtc"]
+	path = third_party/webrtc
+	url = https://github.com/AmbientAI/owt-deps-webrtc.git
