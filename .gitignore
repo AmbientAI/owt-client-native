@@ -5,5 +5,6 @@
 /out
 /testing
 /third_party
+!/third_party/webrtc
 /tools
 /dist
