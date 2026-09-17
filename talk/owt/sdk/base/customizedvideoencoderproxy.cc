@@ -140,6 +140,10 @@ int32_t CustomizedVideoEncoderProxy::Encode(
     if (!external_encoder_->EncodeOneFrame(buffer, request_key_frame))
       return WEBRTC_VIDEO_CODEC_ERROR;
   }
+  if (buffer.empty()) {
+    // No frame this tick; FrameEncodeMetadataWriter accounts for the drop.
+    return WEBRTC_VIDEO_CODEC_OK;
+  }
   std::unique_ptr<uint8_t[]> data(new uint8_t[buffer.size()]);
   uint8_t* data_ptr = data.get();
   uint32_t data_size = static_cast<uint32_t>(buffer.size());
