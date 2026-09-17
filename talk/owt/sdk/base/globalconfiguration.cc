@@ -13,6 +13,7 @@ bool GlobalConfiguration::dual_video_encoder_ = false;
 bool GlobalConfiguration::bwe_optimization_settings_enabled_ = false;
 bool GlobalConfiguration::network_thread_realtime_enabled_ = false;
 bool GlobalConfiguration::skip_pc_thread_for_factory_calls_enabled_ = false;
+bool GlobalConfiguration::passthrough_empty_frame_ok_enabled_ = false;
 std::unique_ptr<AudioFrameGeneratorInterface>
     GlobalConfiguration::audio_frame_generator_ = nullptr;
 std::unique_ptr<VideoDecoderInterface>

@@ -119,6 +119,16 @@ class GlobalConfiguration {
     return skip_pc_thread_for_factory_calls_enabled_;
   }
   /**
+   @brief The passthrough encoder proxy returns WEBRTC_VIDEO_CODEC_OK when the
+   encoder has no frame for this tick, instead of delivering an empty image.
+   */
+  static void SetPassthroughEmptyFrameOkEnabled(bool enabled) {
+    passthrough_empty_frame_ok_enabled_ = enabled;
+  }
+  static bool GetPassthroughEmptyFrameOkEnabled() {
+    return passthrough_empty_frame_ok_enabled_;
+  }
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -294,6 +304,7 @@ class GlobalConfiguration {
    */
   static bool network_thread_realtime_enabled_;
   static bool skip_pc_thread_for_factory_calls_enabled_;
+  static bool passthrough_empty_frame_ok_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not
