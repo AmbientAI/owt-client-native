@@ -114,6 +114,9 @@ void PeerConnectionDependencyFactory::
   int h264_temporal_layers = GlobalConfiguration::GetH264TemporalLayers();
   field_trial_ +=
       "OWT-H264TemporalLayers/" + std::to_string(h264_temporal_layers) + std::string("/");
+  if (GlobalConfiguration::GetTransceiverPruneEnabled()) {
+    field_trial_ += "OWT-TransceiverPrune/Enabled/";
+  }
   webrtc::field_trial::InitFieldTrialsFromString(field_trial_.c_str());
   if (!rtc::InitializeSSL()) {
     RTC_LOG(LS_ERROR) << "Failed to initialize SSL.";
