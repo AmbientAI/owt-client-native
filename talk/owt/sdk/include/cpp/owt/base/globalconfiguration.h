@@ -105,18 +105,15 @@ class GlobalConfiguration {
     return network_thread_realtime_enabled_;
   }
   /**
-   @brief Call CreateLocalMediaStream/CreateLocalVideoTrack on the factory proxy
-   directly instead of first hopping to pc_thread_.
+   @brief WebRTC message-execution optimisations: the factory create calls
+   skip the pc_thread_ hop, the unpublish transceiver walk runs in one Invoke
+   on signaling_thread, and the passthrough encoder proxy returns
+   WEBRTC_VIDEO_CODEC_OK for a tick with no frame. Set by the appliance from
+   NodeConfig webrtc_message_execution_optimization. Default false.
    */
-  static void SetSkipPcThreadForFactoryCallsEnabled(bool enabled) {
-    skip_pc_thread_for_factory_calls_enabled_ = enabled;
-  }
-  /**
-   @brief This function gets whether the pc_thread_ hop is bypassed.
-   @return true or false.
-   */
-  static bool GetSkipPcThreadForFactoryCallsEnabled() {
-    return skip_pc_thread_for_factory_calls_enabled_;
+  static void SetWebrtcMessageExecutionOptimizationEnabled(bool enabled);
+  static bool GetWebrtcMessageExecutionOptimizationEnabled() {
+    return webrtc_message_execution_optimization_enabled_;
   }
   /**
    @brief This function sets the audio input to be an instance of
@@ -293,7 +290,7 @@ class GlobalConfiguration {
    * Default is false. If true, network_thread is promoted to SCHED_RR.
    */
   static bool network_thread_realtime_enabled_;
-  static bool skip_pc_thread_for_factory_calls_enabled_;
+  static bool webrtc_message_execution_optimization_enabled_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not

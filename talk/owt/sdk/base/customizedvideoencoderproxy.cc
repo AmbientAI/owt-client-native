@@ -17,6 +17,7 @@
 #include "talk/owt/sdk/base/mediautils.h"
 #include "talk/owt/sdk/base/nativehandlebuffer.h"
 #include "talk/owt/sdk/include/cpp/owt/base/commontypes.h"
+#include "talk/owt/sdk/include/cpp/owt/base/globalconfiguration.h"
 // H.264 start code length.
 #define H264_SC_LENGTH 4
 // Maximum allowed NALUs in one output frame.
@@ -140,7 +141,8 @@ int32_t CustomizedVideoEncoderProxy::Encode(
     if (!external_encoder_->EncodeOneFrame(buffer, request_key_frame))
       return WEBRTC_VIDEO_CODEC_ERROR;
   }
-  if (buffer.empty()) {
+  if (buffer.empty() &&
+      GlobalConfiguration::GetWebrtcMessageExecutionOptimizationEnabled()) {
     // No frame this tick; FrameEncodeMetadataWriter accounts for the drop.
     return WEBRTC_VIDEO_CODEC_OK;
   }

@@ -20,6 +20,7 @@
 #include "talk/owt/sdk/base/functionalobserver.h"
 #include "talk/owt/sdk/base/sdputils.h"
 #include "talk/owt/sdk/base/sysinfo.h"
+#include "talk/owt/sdk/include/cpp/owt/base/globalconfiguration.h"
 #include "talk/owt/sdk/p2p/p2ppeerconnectionchannel.h"
 #include "webrtc/rtc_base/logging.h"
 #include "webrtc/api/task_queue/default_task_queue_factory.h"
@@ -1303,7 +1304,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
           stream->MediaStream();
       RTC_CHECK(temp_pc_);
       PeerConnectionDependencyFactory* dependency_factory =
-          configuration_.unpublish_on_signaling_thread
+          GlobalConfiguration::GetWebrtcMessageExecutionOptimizationEnabled()
               ? PeerConnectionDependencyFactory::Get()
               : nullptr;
       rtc::Thread* signaling_thread = dependency_factory != nullptr
@@ -1353,7 +1354,7 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       auto log_unpublish = [&] {
         RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=drain_unpublish peerid=" << remote_id_
                           << " on_signaling_thread="
-                          << configuration_.unpublish_on_signaling_thread
+                          << GlobalConfiguration::GetWebrtcMessageExecutionOptimizationEnabled()
                           << " transceivers=" << n_transceivers
                           << " scanned=" << scanned
                           << " hit_index=" << hit_index
