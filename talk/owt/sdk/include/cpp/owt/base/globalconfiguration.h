@@ -105,11 +105,7 @@ class GlobalConfiguration {
     return network_thread_realtime_enabled_;
   }
   /**
-   @brief WebRTC message-execution optimisations: the factory create calls
-   skip the pc_thread_ hop, the unpublish transceiver walk runs in one Invoke
-   on signaling_thread, and the passthrough encoder proxy returns
-   WEBRTC_VIDEO_CODEC_OK for a tick with no frame. Set by the appliance from
-   NodeConfig webrtc_message_execution_optimization. Default false.
+   @brief Enables the WebRTC message-execution optimisations. Default false.
    */
   static void SetWebrtcMessageExecutionOptimizationEnabled(bool enabled);
   static bool GetWebrtcMessageExecutionOptimizationEnabled() {
