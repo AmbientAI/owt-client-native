@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "owt/base/globalconfiguration.h"
+#include "webrtc/api/ambient_flags.h"
 namespace owt {
 namespace base {
 #if defined(WEBRTC_WIN)
@@ -12,7 +13,7 @@ bool GlobalConfiguration::encoded_frame_ = false;
 bool GlobalConfiguration::dual_video_encoder_ = false;
 bool GlobalConfiguration::bwe_optimization_settings_enabled_ = false;
 bool GlobalConfiguration::network_thread_realtime_enabled_ = false;
-bool GlobalConfiguration::skip_pc_thread_for_factory_calls_enabled_ = false;
+bool GlobalConfiguration::webrtc_message_execution_optimization_enabled_ = false;
 std::unique_ptr<AudioFrameGeneratorInterface>
     GlobalConfiguration::audio_frame_generator_ = nullptr;
 std::unique_ptr<VideoDecoderInterface>
@@ -26,4 +27,9 @@ AudioProcessingSettings GlobalConfiguration::audio_processing_settings_ = {
     true, true, true, true};
 #endif
 }
+}
+
+void owt::base::GlobalConfiguration::SetWebrtcMessageExecutionOptimizationEnabled(bool enabled) {
+  webrtc_message_execution_optimization_enabled_ = enabled;
+  webrtc::AmbientFlags::SetMessageExecutionOptimization(enabled);
 }
