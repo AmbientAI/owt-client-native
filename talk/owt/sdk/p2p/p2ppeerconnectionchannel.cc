@@ -22,6 +22,7 @@
 #include "talk/owt/sdk/base/sysinfo.h"
 #include "talk/owt/sdk/include/cpp/owt/base/globalconfiguration.h"
 #include "talk/owt/sdk/p2p/p2ppeerconnectionchannel.h"
+#include "webrtc/rtc_base/time_utils.h"
 #include "webrtc/rtc_base/logging.h"
 #include "webrtc/api/task_queue/default_task_queue_factory.h"
 
@@ -491,6 +492,13 @@ void P2PPeerConnectionChannel::OnMessageSignal(Json::Value& message) {
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=signal_received peerid=" << remote_id_
                    << " msg_type=" << type
                    << " session_state=" << session_state_;
+  if (type == "answer") {
+    const int64_t offer_sent_ms = offer_sent_ms_.exchange(0);
+    if (offer_sent_ms != 0) {
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=offer_answer_rtt peerid=" << remote_id_
+                        << " rtt_ms=" << (rtc::TimeMillis() - offer_sent_ms);
+    }
+  }
   // Store reference so peer_connection_ is not deleted until function ends
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
   if (!temp_pc_) {
@@ -930,6 +938,9 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
   Json::Value json;
   json[kMessageTypeKey] = kChatSignal;
   json[kMessageDataKey] = signal;
+  if (desc->type() == "offer") {
+    offer_sent_ms_.store(rtc::TimeMillis());
+  }
   // The fourth signaling message of SDP to remote peer.
   SendSignalingMessage(json);
 }
