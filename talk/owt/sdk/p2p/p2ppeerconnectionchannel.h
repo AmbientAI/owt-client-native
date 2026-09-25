@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #ifndef WOOGEEN_P2P_P2PPEERCONNECTIONCHANNEL_H_
 #define WOOGEEN_P2P_P2PPEERCONNECTIONCHANNEL_H_
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -211,6 +212,8 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   std::unordered_map<std::string, std::function<void()>> publish_success_callbacks_;
   // Store remote SDP if it cannot be set currently.
   std::unique_ptr<webrtc::SessionDescriptionInterface> pending_remote_sdp_;
+  // When the last local offer was sent; 0 once its answer has arrived.
+  std::atomic<int64_t> offer_sent_ms_{0};
   std::mutex last_disconnect_mutex_;
   std::chrono::time_point<std::chrono::system_clock>
       last_disconnect_;  // Last time |peer_connection_| changes its state to
