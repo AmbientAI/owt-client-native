@@ -57,6 +57,11 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   static size_t ShardCount();
   // Shard index GetForKey(|key|) resolves to. Exposed for logging and tests.
   static size_t ShardIndexForKey(const std::string& key);
+  // Same index as ShardIndexForKey(), from the same code, but never builds a
+  // factory: before the shards exist it uses the count they will be built
+  // with. For callers that only label work (logs) and may run before the
+  // first PeerConnection exists.
+  static size_t PeekShardIndexForKey(const std::string& key);
   size_t shard_index() const { return shard_index_; }
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> CreatePeerConnection(
       const webrtc::PeerConnectionInterface::RTCConfiguration& config,

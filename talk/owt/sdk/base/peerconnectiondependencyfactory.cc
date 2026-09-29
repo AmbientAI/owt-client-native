@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -84,6 +85,16 @@ size_t ClampedShardCount() {
   if (requested > max_shards) return static_cast<size_t>(max_shards);
   return static_cast<size_t>(requested);
 }
+
+// The one placement rule: every shard lookup, including the log-only peek,
+// goes through here.
+size_t IndexFor(const std::string& key, size_t count) {
+  if (count <= 1 || key.empty()) return 0;
+  return static_cast<size_t>(Fnv1a64(key) % count);
+}
+
+// Size of the shard list once Shards() has built it; 0 before that.
+std::atomic<size_t> g_built_shard_count{0};
 
 // Thread names are capped at 15 characters by the kernel. Shard 0 keeps the
 // historical names so existing tooling that looks threads up by name (the
@@ -168,6 +179,7 @@ PeerConnectionDependencyFactory::Shards() {
       factory->CreatePeerConnectionFactory();
       shards->push_back(factory);
     }
+    g_built_shard_count.store(count, std::memory_order_release);
     // LS_ERROR only because OWT runs at kError; this is informational.
     RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=factory_shards_ready shards="
                       << count;
@@ -181,9 +193,15 @@ size_t PeerConnectionDependencyFactory::ShardCount() {
 
 size_t PeerConnectionDependencyFactory::ShardIndexForKey(
     const std::string& key) {
-  const size_t count = ShardCount();
-  if (count <= 1 || key.empty()) return 0;
-  return static_cast<size_t>(Fnv1a64(key) % count);
+  return IndexFor(key, ShardCount());
+}
+
+size_t PeerConnectionDependencyFactory::PeekShardIndexForKey(
+    const std::string& key) {
+  // Once built, the list's own size; before that, the clamped config value
+  // the list will be built from. Either way the same count placement uses.
+  const size_t built = g_built_shard_count.load(std::memory_order_acquire);
+  return IndexFor(key, built ? built : ClampedShardCount());
 }
 
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::GetForKey(

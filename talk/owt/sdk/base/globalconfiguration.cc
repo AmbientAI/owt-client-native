@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "owt/base/globalconfiguration.h"
+#include "talk/owt/sdk/base/peerconnectiondependencyfactory.h"
 #include "webrtc/api/ambient_flags.h"
 namespace owt {
 namespace base {
@@ -18,6 +19,12 @@ int GlobalConfiguration::peer_connection_factory_shards_ = 1;
 // Out-of-line definition: owt builds as C++14, where an ODR-used static
 // constexpr member (e.g. passed to std::min by reference) needs one.
 constexpr int GlobalConfiguration::kMaxPeerConnectionFactoryShards;
+
+int GlobalConfiguration::GetPeerConnectionFactoryShardForKey(
+    const std::string& key) {
+  return static_cast<int>(
+      PeerConnectionDependencyFactory::PeekShardIndexForKey(key));
+}
 std::unique_ptr<AudioFrameGeneratorInterface>
     GlobalConfiguration::audio_frame_generator_ = nullptr;
 std::unique_ptr<VideoDecoderInterface>

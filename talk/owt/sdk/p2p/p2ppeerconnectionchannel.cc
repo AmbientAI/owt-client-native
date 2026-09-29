@@ -796,6 +796,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
   const char* ice_conn_name = (new_state >= 0 && new_state <= 7) ? kIceConnStateNames[new_state] : "unknown";
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=IceConnectionState peerid=" << remote_id_
+                   << " shard=" << FactoryShardIndex()
                    << " state=" << ice_conn_name << " (" << new_state << ")";
   switch (new_state) {
     case webrtc::PeerConnectionInterface::kIceConnectionConnected:
@@ -1442,6 +1443,7 @@ void P2PPeerConnectionChannel::SendStop(
 void P2PPeerConnectionChannel::ClosePeerConnection() {
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=close_peer_connection peerid=" << remote_id_
+                   << " shard=" << FactoryShardIndex()
                    << " already_ended=" << ended_;
   // Reference to peer connection  that outlives the scope of the locks.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;

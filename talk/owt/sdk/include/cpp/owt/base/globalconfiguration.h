@@ -4,6 +4,7 @@
 #ifndef OWT_BASE_GLOBALCONFIGURATION_H_
 #define OWT_BASE_GLOBALCONFIGURATION_H_
 #include <memory>
+#include <string>
 #include "owt/base/framegeneratorinterface.h"
 #include "owt/base/videodecoderinterface.h"
 #if defined(WEBRTC_WIN)
@@ -128,6 +129,15 @@ class GlobalConfiguration {
     return peer_connection_factory_shards_;
   }
   static constexpr int kMaxPeerConnectionFactoryShards = 16;
+  /**
+   @brief Shard a peer (or stream) key runs on, for tagging application logs.
+   @details Calls the SDK's own placement code, so it always agrees with where
+   the peer's PeerConnection and streams are built. It never creates a
+   factory, so it is safe to call before the first PeerConnection exists.
+   Returns 0 with one shard or an empty key.
+   @param key Remote peer id (the same string passed to Publish()).
+   */
+  static int GetPeerConnectionFactoryShardForKey(const std::string& key);
   /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
