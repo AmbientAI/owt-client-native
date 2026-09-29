@@ -4,6 +4,7 @@
 #ifndef OWT_BASE_GLOBALCONFIGURATION_H_
 #define OWT_BASE_GLOBALCONFIGURATION_H_
 #include <memory>
+#include <string>
 #include "owt/base/framegeneratorinterface.h"
 #include "owt/base/videodecoderinterface.h"
 #if defined(WEBRTC_WIN)
@@ -111,6 +112,32 @@ class GlobalConfiguration {
   static bool GetWebrtcMessageExecutionOptimizationEnabled() {
     return webrtc_message_execution_optimization_enabled_;
   }
+  /**
+   @brief Sets how many independent PeerConnectionFactory shards to run. Each
+   shard owns its own network, worker and signaling threads, and each peer is
+   pinned to one shard by its id, so N shards spread ICE/DTLS/RTP, media and
+   SDP work across N sets of threads instead of one. Default 1, which keeps the
+   single-factory behaviour exactly. Read once, when the first factory is
+   created, so it must be set before any stream or PeerConnection exists.
+   Values are clamped to [1, kMaxPeerConnectionFactoryShards].
+   @param shards Number of factory shards.
+   */
+  static void SetPeerConnectionFactoryShards(int shards) {
+    peer_connection_factory_shards_ = shards;
+  }
+  static int GetPeerConnectionFactoryShards() {
+    return peer_connection_factory_shards_;
+  }
+  static constexpr int kMaxPeerConnectionFactoryShards = 16;
+  /**
+   @brief Shard a peer (or stream) key runs on, for tagging application logs.
+   @details Calls the SDK's own placement code, so it always agrees with where
+   the peer's PeerConnection and streams are built. It never creates a
+   factory, so it is safe to call before the first PeerConnection exists.
+   Returns 0 with one shard or an empty key.
+   @param key Remote peer id (the same string passed to Publish()).
+   */
+  static int GetPeerConnectionFactoryShardForKey(const std::string& key);
   /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
@@ -287,6 +314,10 @@ class GlobalConfiguration {
    */
   static bool network_thread_realtime_enabled_;
   static bool webrtc_message_execution_optimization_enabled_;
+  /**
+   * Default is 1 (one factory). See SetPeerConnectionFactoryShards().
+   */
+  static int peer_connection_factory_shards_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not

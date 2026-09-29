@@ -4,7 +4,10 @@
 #ifndef OWT_BASE_PEERCONNECTIONDEPENDENCYFACTORY_H_
 #define OWT_BASE_PEERCONNECTIONDEPENDENCYFACTORY_H_
 #include <mutex>
+#include <string>
+#include <vector>
 #include "webrtc/api/peer_connection_interface.h"
+#include "webrtc/api/task_queue/task_queue_factory.h"
 #include "webrtc/api/media_stream_interface.h"
 #if defined(WEBRTC_WIN)
 #include "webrtc/api/task_queue/task_queue_factory.h"
@@ -36,8 +39,30 @@ class PeerConnectionThread : public rtc::Thread {
 class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
  public:
   // Get a PeerConnectionDependencyFactory instance. It doesn't create a new
-  // instance. It always return the same instance.
+  // instance. It always return the same instance. This is also shard 0.
   static PeerConnectionDependencyFactory* Get();
+  // Returns the factory shard that owns |key| (a peer id). Every shard has its
+  // own network, worker and signaling threads, so spreading peers across
+  // shards spreads their ICE/DTLS/RTP, media and SDP work across threads.
+  //
+  // The mapping is a pure function of |key| and the shard count, so the same
+  // peer always lands on the same shard. That is load-bearing: a track made
+  // by one factory must not be added to a PeerConnection of another, because
+  // their proxies are bound to different threads. A peer's streams and its
+  // PeerConnection must therefore be created with the same key.
+  //
+  // With one shard (the default), and for an empty key, this is Get().
+  static PeerConnectionDependencyFactory* GetForKey(const std::string& key);
+  // Number of shards, latched from GlobalConfiguration on first use.
+  static size_t ShardCount();
+  // Shard index GetForKey(|key|) resolves to. Exposed for logging and tests.
+  static size_t ShardIndexForKey(const std::string& key);
+  // Same index as ShardIndexForKey(), from the same code, but never builds a
+  // factory: before the shards exist it uses the count they will be built
+  // with. For callers that only label work (logs) and may run before the
+  // first PeerConnection exists.
+  static size_t PeekShardIndexForKey(const std::string& key);
+  size_t shard_index() const { return shard_index_; }
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> CreatePeerConnection(
       const webrtc::PeerConnectionInterface::RTCConfiguration& config,
       webrtc::PeerConnectionObserver* observer);
@@ -64,10 +89,19 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
   rtc::Thread* SignalingThread() const { return signaling_thread.get(); }
   ~PeerConnectionDependencyFactory();
  protected:
-  explicit PeerConnectionDependencyFactory();
+  explicit PeerConnectionDependencyFactory(size_t shard_index = 0);
   virtual const rtc::scoped_refptr<PeerConnectionFactoryInterface>&
   GetPeerConnectionFactory();
  private:
+  // All shards, index 0 being Get(). Built once, never destroyed.
+  static const std::vector<PeerConnectionDependencyFactory*>& Shards();
+  // Audio device for shards other than 0. See the .cc for why.
+  rtc::scoped_refptr<webrtc::AudioDeviceModule>
+  CreateShardAudioDeviceModuleOnCurrentThread();
+  const size_t shard_index_;
+  // Owns the task queues of a non-zero shard's dummy audio device. Lives as
+  // long as the factory, which is as long as the process.
+  std::unique_ptr<webrtc::TaskQueueFactory> shard_task_queue_factory_;
   // Create a PeerConnectionDependencyFactory instance.
   // static rtc::scoped_refptr<PeerConnectionDependencyFactory> Create();
   void CreatePeerConnectionFactory();
