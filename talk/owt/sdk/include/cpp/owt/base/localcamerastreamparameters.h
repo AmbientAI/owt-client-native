@@ -132,6 +132,15 @@ class LocalCustomizedStreamParameters final {
     @return true or false.
   */
   bool AudioEnabled() const { return audio_enabled_; }
+  /**
+    @brief Set the factory-shard key: the id of the remote peer this stream is
+    published to. The stream's track is then created on the same factory shard
+    as that peer's PeerConnection, which is required (a track from one factory
+    must not be added to another factory's PeerConnection). Empty, the
+    default, means shard 0.
+  */
+  void ShardKey(const std::string& key) { shard_key_ = key; }
+  const std::string& ShardKey() const { return shard_key_; }
   /** @endcond */
  private:
   bool video_enabled_;
@@ -140,6 +149,7 @@ class LocalCustomizedStreamParameters final {
   int resolution_height_;
   uint32_t fps_;
   uint32_t bitrate_kbps_;
+  std::string shard_key_;
 };
 /**
 @brief This class contains parameters and methods that's needed for creating a

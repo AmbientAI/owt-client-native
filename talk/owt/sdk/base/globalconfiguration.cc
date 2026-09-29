@@ -14,6 +14,10 @@ bool GlobalConfiguration::dual_video_encoder_ = false;
 bool GlobalConfiguration::bwe_optimization_settings_enabled_ = false;
 bool GlobalConfiguration::network_thread_realtime_enabled_ = false;
 bool GlobalConfiguration::webrtc_message_execution_optimization_enabled_ = false;
+int GlobalConfiguration::peer_connection_factory_shards_ = 1;
+// Out-of-line definition: owt builds as C++14, where an ODR-used static
+// constexpr member (e.g. passed to std::min by reference) needs one.
+constexpr int GlobalConfiguration::kMaxPeerConnectionFactoryShards;
 std::unique_ptr<AudioFrameGeneratorInterface>
     GlobalConfiguration::audio_frame_generator_ = nullptr;
 std::unique_ptr<VideoDecoderInterface>

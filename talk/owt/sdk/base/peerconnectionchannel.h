@@ -63,7 +63,18 @@ class PeerConnectionChannel : public webrtc::PeerConnectionObserver,
   PeerConnectionChannel(PeerConnectionChannelConfiguration configuration);
  protected:
   virtual ~PeerConnectionChannel();
-  bool InitializePeerConnection();
+  // |shard_key| picks the factory shard (and so the network, worker and
+  // signaling threads) this channel's PeerConnection runs on. It is passed in
+  // rather than read from a virtual because derived classes call this from
+  // their constructor. Empty means shard 0, i.e. the single shared factory.
+  bool InitializePeerConnection(const std::string& shard_key = std::string());
+  // Signaling thread of the factory shard this channel's PeerConnection was
+  // created on; nullptr before InitializePeerConnection(). Code that batches
+  // proxy calls into one hop must hop to THIS thread: hopping to another
+  // shard's signaling thread would turn each proxy call back into a marshal.
+  rtc::Thread* FactorySignalingThread() const;
+  // Index of that factory shard; 0 before InitializePeerConnection().
+  size_t FactoryShardIndex() const;
   const webrtc::SessionDescriptionInterface* LocalDescription();
   PeerConnectionInterface::SignalingState SignalingState() const;
   // Apply the bitrate settings on all tracks available. Failing to set any of them
@@ -130,8 +141,8 @@ class PeerConnectionChannel : public webrtc::PeerConnectionObserver,
   virtual void OnMessage(const webrtc::DataBuffer& buffer) override {
     OnDataChannelMessage(buffer);
   }
-  // |factory_| is got from PeerConnectionDependencyFactory::Get() which is
-  // shared among all PeerConnectionChannels.
+  // |factory_| is got from PeerConnectionDependencyFactory::GetForKey(), so it
+  // is shared by every PeerConnectionChannel on the same factory shard.
   rtc::scoped_refptr<PeerConnectionDependencyFactory> factory_;
 };
 }

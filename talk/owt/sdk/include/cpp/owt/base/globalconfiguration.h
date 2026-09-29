@@ -112,6 +112,23 @@ class GlobalConfiguration {
     return webrtc_message_execution_optimization_enabled_;
   }
   /**
+   @brief Sets how many independent PeerConnectionFactory shards to run. Each
+   shard owns its own network, worker and signaling threads, and each peer is
+   pinned to one shard by its id, so N shards spread ICE/DTLS/RTP, media and
+   SDP work across N sets of threads instead of one. Default 1, which keeps the
+   single-factory behaviour exactly. Read once, when the first factory is
+   created, so it must be set before any stream or PeerConnection exists.
+   Values are clamped to [1, kMaxPeerConnectionFactoryShards].
+   @param shards Number of factory shards.
+   */
+  static void SetPeerConnectionFactoryShards(int shards) {
+    peer_connection_factory_shards_ = shards;
+  }
+  static int GetPeerConnectionFactoryShards() {
+    return peer_connection_factory_shards_;
+  }
+  static constexpr int kMaxPeerConnectionFactoryShards = 16;
+  /**
    @brief This function sets the audio input to be an instance of
    AudioFrameGeneratorInterface.
    @details When it is enabled, SDK will not capture audio from mic. This means
@@ -287,6 +304,10 @@ class GlobalConfiguration {
    */
   static bool network_thread_realtime_enabled_;
   static bool webrtc_message_execution_optimization_enabled_;
+  /**
+   * Default is 1 (one factory). See SetPeerConnectionFactoryShards().
+   */
+  static int peer_connection_factory_shards_;
   static std::unique_ptr<AudioFrameGeneratorInterface> audio_frame_generator_;
   /**
    @brief This function returns flag indicating whether customized video decoder is enabled or not
