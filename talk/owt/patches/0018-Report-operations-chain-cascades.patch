@@ -1,0 +1,105 @@
+From 549c0f6c67996abceab086f8720d7b8145dae91c Mon Sep 17 00:00:00 2001
+From: ambient <dev@ambient.ai>
+Date: Thu, 3 Sep 2026 14:41:53 +0000
+Subject: Report operations-chain cascades: how many operations ran, and for
+ how long
+
+A completing operation runs the next one synchronously, which can complete and run
+another, so one caller-visible chain release is an unbounded run of operations on a
+single stack inside one Thread::Dispatch. The chain_ms already logged by the SDP
+observers gives the total but cannot separate one slow operation from many fast ones.
+
+Only the outermost frame reports, so a cascade produces one line.
+---
+ rtc_base/operations_chain.cc | 31 +++++++++++++++++++++++++++++++
+ rtc_base/operations_chain.h  | 11 +++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/rtc_base/operations_chain.cc b/rtc_base/operations_chain.cc
+index 68ee20babc..8ea9d3964a 100644
+--- a/rtc_base/operations_chain.cc
++++ b/rtc_base/operations_chain.cc
+@@ -11,9 +11,16 @@
+ #include "rtc_base/operations_chain.h"
+ 
+ #include "rtc_base/checks.h"
++#include "rtc_base/logging.h"
++#include "rtc_base/time_utils.h"
+ 
+ namespace rtc {
+ 
++namespace {
++// A cascade past this is reported; a single operation completing normally is not.
++constexpr int64_t kSlowCascadeMs = 1000;
++}  // namespace
++
+ OperationsChain::CallbackHandle::CallbackHandle(
+     scoped_refptr<OperationsChain> operations_chain)
+     : operations_chain_(std::move(operations_chain)) {}
+@@ -59,10 +66,34 @@ void OperationsChain::OnOperationComplete() {
+   // The front element is the operation that just completed, remove it.
+   RTC_DCHECK(!chained_operations_.empty());
+   chained_operations_.pop();
++
++  // Run() below re-enters this method when the operation it starts completes
++  // synchronously, so cascade_depth_ counts nesting rather than iterations. Only
++  // the outermost frame stamps the start and reports, giving one line per drain.
++  const bool outermost = (cascade_depth_ == 0);
++  if (outermost) {
++    cascade_start_ms_ = rtc::TimeMillis();
++    cascade_ops_ = 0;
++  }
++  ++cascade_depth_;
++  ++cascade_ops_;
++
+   // If there are any other operations chained, execute the next one.
+   if (!chained_operations_.empty()) {
+     chained_operations_.front()->Run();
+   }
++
++  --cascade_depth_;
++  if (outermost) {
++    const int64_t elapsed = rtc::TimeMillis() - cascade_start_ms_;
++    if (elapsed >= kSlowCascadeMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=chain_cascade"
++                        << " chain=" << static_cast<const void*>(this)
++                        << " operations=" << cascade_ops_
++                        << " remaining=" << chained_operations_.size()
++                        << " cascade_ms=" << elapsed;
++    }
++  }
+ }
+ 
+ }  // namespace rtc
+diff --git a/rtc_base/operations_chain.h b/rtc_base/operations_chain.h
+index b6ec46e04a..4b554bf035 100644
+--- a/rtc_base/operations_chain.h
++++ b/rtc_base/operations_chain.h
+@@ -24,6 +24,7 @@
+ #include "rtc_base/ref_count.h"
+ #include "rtc_base/ref_counted_object.h"
+ #include "rtc_base/synchronization/sequence_checker.h"
++#include "rtc_base/system/rtc_export.h"
+ 
+ namespace rtc {
+ 
+@@ -182,6 +183,16 @@ class OperationsChain final : public RefCountedObject<RefCountInterface> {
+   std::queue<std::unique_ptr<rtc_operations_chain_internal::Operation>>
+       chained_operations_ RTC_GUARDED_BY(sequence_checker_);
+ 
++  // A completing operation runs the next one synchronously, which can complete and
++  // run another, so one caller-visible "drain" is an unbounded run of operations on
++  // one stack. Without these, a slow drain cannot be told from a long one: the count
++  // says how many ran, the stamp says when the run began. cascade_depth_ tracks
++  // nesting so only the outermost frame reports; cascade_ops_ accumulates across the
++  // whole run, since each nested frame unwinds before the outermost one reports.
++  int cascade_depth_ RTC_GUARDED_BY(sequence_checker_) = 0;
++  int cascade_ops_ RTC_GUARDED_BY(sequence_checker_) = 0;
++  int64_t cascade_start_ms_ RTC_GUARDED_BY(sequence_checker_) = 0;
++
+   RTC_DISALLOW_COPY_AND_ASSIGN(OperationsChain);
+ };
+ 
+-- 
+2.25.1
+

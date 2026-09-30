@@ -1,0 +1,360 @@
+From c0ef5841ee7ba96f49122570e83f50ae8b833a99 Mon Sep 17 00:00:00 2001
+From: ambient <dev@ambient.ai>
+Date: Fri, 4 Sep 2026 06:53:14 +0000
+Subject: Break down DoSetLocalDescription, Close and AddTrack into phases
+
+These three are the largest signalling-thread dispatches observed: AddTrack up to 48s
+(on-CPU), DoSetLocalDescription up to 19s and Close up to 10s. slow_dispatch names them
+but not what inside them is slow.
+
+Each is split into its constituent stages, separating the blocking Invokes onto the
+network and worker threads from the work that scales with transceiver count. Every line
+carries transceivers, and the SLD and Close lines carry m_lines, which are expected to
+match.
+---
+ pc/peer_connection.cc | 158 ++++++++++++++++++++++++++++++++++++++++++
+ rtc_base/thread.cc    |   1 +
+ 2 files changed, 159 insertions(+)
+
+diff --git a/pc/peer_connection.cc b/pc/peer_connection.cc
+index 01b3e8bc5f..166e0a12a6 100644
+--- a/pc/peer_connection.cc
++++ b/pc/peer_connection.cc
+@@ -648,6 +648,14 @@ const ContentInfo* FindTransceiverMSection(
+ 
+ // Above this, the chain drain and the wrapped observer are each logged.
+ constexpr int64_t kOperationWrapperLogThresholdMs = 1000;
++// Close holds the signalling thread throughout; report anything past this.
++constexpr int64_t kSlowCloseLogThresholdMs = 1000;
++// DoSetLocalDescription is the largest dispatch seen; report anything past this.
++constexpr int64_t kSlowSetLocalDescriptionMs = 1000;
++// AddTrack walks senders and transceivers; report anything past this.
++constexpr int64_t kSlowAddTrackMs = 1000;
++// ApplyLocalDescription dominates DoSetLocalDescription; report anything past this.
++constexpr int64_t kSlowApplyLocalDescriptionMs = 1000;
+ 
+ // Wraps a CreateSessionDescriptionObserver and an OperationsChain operation
+ // complete callback. When the observer is invoked, the wrapped observer is
+@@ -1583,17 +1591,44 @@ RTCErrorOr<rtc::scoped_refptr<RtpSenderInterface>> PeerConnection::AddTrack(
+     LOG_AND_RETURN_ERROR(RTCErrorType::INVALID_STATE,
+                          "PeerConnection is closed.");
+   }
++  // AddTrack has been observed holding the signalling thread for 48s while on-CPU
++  // rather than blocked, so the stages that walk senders/transceivers are timed
++  // separately from the ones that do not.
++  const int64_t at_t0 = rtc::TimeMillis();
++  const size_t at_transceivers = transceivers_.size();
++
+   if (FindSenderForTrack(track)) {
+     LOG_AND_RETURN_ERROR(
+         RTCErrorType::INVALID_PARAMETER,
+         "Sender already exists for track " + track->id() + ".");
+   }
++  const int64_t at_t_find = rtc::TimeMillis();
++
+   auto sender_or_error =
+       (IsUnifiedPlan() ? AddTrackUnifiedPlan(track, stream_ids)
+                        : AddTrackPlanB(track, stream_ids));
++  const int64_t at_t_add = rtc::TimeMillis();
++
++  int64_t at_t_reneg = at_t_add;
++  int64_t at_t_stats = at_t_add;
+   if (sender_or_error.ok()) {
+     UpdateNegotiationNeeded();
++    at_t_reneg = rtc::TimeMillis();
+     stats_->AddTrack(track);
++    at_t_stats = rtc::TimeMillis();
++  }
++
++  const int64_t at_total = at_t_stats - at_t0;
++  if (at_total >= kSlowAddTrackMs) {
++    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=add_track_phases"
++                      << " handler=" << static_cast<const void*>(this)
++                      << " total_ms=" << at_total
++                      << " find_sender_ms=" << (at_t_find - at_t0)
++                      << " add_track_ms=" << (at_t_add - at_t_find)
++                      << " renegotiation_ms=" << (at_t_reneg - at_t_add)
++                      << " stats_add_ms=" << (at_t_stats - at_t_reneg)
++                      << " transceivers=" << at_transceivers
++                      << " kind=" << track->kind();
+   }
+   return sender_or_error;
+ }
+@@ -2634,7 +2669,16 @@ void PeerConnection::DoSetLocalDescription(
+     return;
+   }
+ 
++  // This call holds the signalling thread for its whole duration and is the single
++  // largest dispatch observed on this node, so each stage is timed separately.
++  // m_lines and transceivers are recorded because the expensive stages scale with
++  // them; they are expected to match.
++  const int64_t sld_t0 = rtc::TimeMillis();
++  const size_t sld_m_lines = desc->number_of_mediasections();
++  const size_t sld_transceivers = transceivers_.size();
++
+   RTCError error = ValidateSessionDescription(desc.get(), cricket::CS_LOCAL);
++  const int64_t sld_t_validate = rtc::TimeMillis();
+   if (!error.ok()) {
+     std::string error_message = GetSetDescriptionErrorMessage(
+         cricket::CS_LOCAL, desc->GetType(), error);
+@@ -2650,6 +2694,7 @@ void PeerConnection::DoSetLocalDescription(
+   const SdpType type = desc->GetType();
+ 
+   error = ApplyLocalDescription(std::move(desc));
++  const int64_t sld_t_apply = rtc::TimeMillis();
+   // |desc| may be destroyed at this point.
+ 
+   if (!error.ok()) {
+@@ -2673,6 +2718,7 @@ void PeerConnection::DoSetLocalDescription(
+   // MSG_SET_SESSIONDESCRIPTION_SUCCESS, so that we don't signal any candidates
+   // before signaling that SetLocalDescription completed.
+   transport_controller_->MaybeStartGathering();
++  const int64_t sld_t_gather = rtc::TimeMillis();
+ 
+   if (local_description()->GetType() == SdpType::kAnswer) {
+     // TODO(deadbeef): We already had to hop to the network thread for
+@@ -2683,15 +2729,34 @@ void PeerConnection::DoSetLocalDescription(
+     // Make UMA notes about what was agreed to.
+     ReportNegotiatedSdpSemantics(*local_description());
+   }
++  const int64_t sld_t_discard = rtc::TimeMillis();
+ 
+   if (IsUnifiedPlan()) {
+     bool was_negotiation_needed = is_negotiation_needed_;
+     UpdateNegotiationNeeded();
+     if (signaling_state() == kStable && was_negotiation_needed &&
+         is_negotiation_needed_) {
++      // Runs synchronously on this thread and re-enters application code, so it
++      // is inside this dispatch rather than after it.
+       Observer()->OnRenegotiationNeeded();
+     }
+   }
++  const int64_t sld_t_reneg = rtc::TimeMillis();
++
++  const int64_t sld_total = sld_t_reneg - sld_t0;
++  if (sld_total >= kSlowSetLocalDescriptionMs) {
++    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_local_phases"
++                      << " handler=" << static_cast<const void*>(this)
++                      << " total_ms=" << sld_total
++                      << " validate_ms=" << (sld_t_validate - sld_t0)
++                      << " apply_ms=" << (sld_t_apply - sld_t_validate)
++                      << " gather_ms=" << (sld_t_gather - sld_t_apply)
++                      << " discard_pool_ms=" << (sld_t_discard - sld_t_gather)
++                      << " renegotiation_ms=" << (sld_t_reneg - sld_t_discard)
++                      << " m_lines=" << sld_m_lines
++                      << " transceivers=" << sld_transceivers
++                      << " sdp_type=" << SdpTypeToString(type);
++  }
+ 
+   NoteUsageEvent(UsageEvent::SET_LOCAL_DESCRIPTION_SUCCEEDED);
+ }
+@@ -2701,9 +2766,17 @@ RTCError PeerConnection::ApplyLocalDescription(
+   RTC_DCHECK_RUN_ON(signaling_thread());
+   RTC_DCHECK(desc);
+ 
++  // ApplyLocalDescription is ~100% of DoSetLocalDescription on every sample, so the
++  // stages that walk transceivers or touch the transport are timed apart from the
++  // ones that do not. Early returns skip the log; only the success path reports.
++  const int64_t ald_t0 = rtc::TimeMillis();
++  const size_t ald_m_lines = desc->number_of_mediasections();
++  const size_t ald_transceivers = transceivers_.size();
++
+   // Update stats here so that we have the most recent stats for tracks and
+   // streams that might be removed by updating the session description.
+   stats_->UpdateStats(kStatsOutputLevelStandard);
++  const int64_t ald_t_stats = rtc::TimeMillis();
+ 
+   // Take a reference to the old local description since it's used below to
+   // compare against the new local description. When setting the new local
+@@ -2743,15 +2816,20 @@ RTCError PeerConnection::ApplyLocalDescription(
+     }
+   }
+ 
++  const int64_t ald_t_swap = rtc::TimeMillis();
+   RTCError error = PushdownTransportDescription(cricket::CS_LOCAL, type);
++  const int64_t ald_t_pushdown = rtc::TimeMillis();
+   if (!error.ok()) {
+     return error;
+   }
+ 
++  int64_t ald_t_update_tx = ald_t_pushdown;
++  int64_t ald_t_loop1 = ald_t_pushdown;
+   if (IsUnifiedPlan()) {
+     RTCError error = UpdateTransceiversAndDataChannels(
+         cricket::CS_LOCAL, *local_description(), old_local_description,
+         remote_description());
++    ald_t_update_tx = rtc::TimeMillis();
+     if (!error.ok()) {
+       return error;
+     }
+@@ -2803,6 +2881,7 @@ RTCError PeerConnection::ApplyLocalDescription(
+     for (const auto& stream : removed_streams) {
+       observer->OnRemoveStream(stream);
+     }
++    ald_t_loop1 = rtc::TimeMillis();
+   } else {
+     // Media channels will be created only when offer is set. These may use new
+     // transports just created by PushdownTransportDescription.
+@@ -2818,8 +2897,10 @@ RTCError PeerConnection::ApplyLocalDescription(
+     RemoveUnusedChannels(local_description()->description());
+   }
+ 
++  const int64_t ald_t_channels = rtc::TimeMillis();
+   error = UpdateSessionState(type, cricket::CS_LOCAL,
+                              local_description()->description());
++  const int64_t ald_t_session = rtc::TimeMillis();
+   if (!error.ok()) {
+     return error;
+   }
+@@ -2828,6 +2909,7 @@ RTCError PeerConnection::ApplyLocalDescription(
+     // Now that we have a local description, we can push down remote candidates.
+     UseCandidatesInSessionDescription(remote_description());
+   }
++  const int64_t ald_t_candidates = rtc::TimeMillis();
+ 
+   pending_ice_restarts_.clear();
+   if (session_error() != SessionError::kNone) {
+@@ -2912,6 +2994,31 @@ RTCError PeerConnection::ApplyLocalDescription(
+     local_ice_credentials_to_replace_->ClearIceCredentials();
+   }
+ 
++  const int64_t ald_end = rtc::TimeMillis();
++  const int64_t ald_total = ald_end - ald_t0;
++  if (ald_total >= kSlowApplyLocalDescriptionMs) {
++    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=apply_local_phases"
++                      << " handler=" << static_cast<const void*>(this)
++                      << " total_ms=" << ald_total
++                      << " update_stats_ms=" << (ald_t_stats - ald_t0)
++                      << " swap_desc_ms=" << (ald_t_swap - ald_t_stats)
++                      << " pushdown_transport_ms="
++                      << (ald_t_pushdown - ald_t_swap)
++                      << " update_transceivers_ms="
++                      << (ald_t_update_tx - ald_t_pushdown)
++                      << " transceiver_loop1_ms="
++                      << (ald_t_loop1 - ald_t_update_tx)
++                      << " channels_loop2_ms=" << (ald_t_channels - ald_t_loop1)
++                      << " update_session_ms="
++                      << (ald_t_session - ald_t_channels)
++                      << " use_candidates_ms="
++                      << (ald_t_candidates - ald_t_session)
++                      << " tail_ms=" << (ald_end - ald_t_candidates)
++                      << " m_lines=" << ald_m_lines
++                      << " transceivers=" << ald_transceivers
++                      << " sdp_type=" << SdpTypeToString(type);
++  }
++
+   return RTCError::OK();
+ }
+ 
+@@ -4488,26 +4595,49 @@ const SessionDescriptionInterface* PeerConnection::pending_remote_description()
+ void PeerConnection::Close() {
+   RTC_DCHECK_RUN_ON(signaling_thread());
+   TRACE_EVENT0("webrtc", "PeerConnection::Close");
++
++  // Close holds the signalling thread for its whole duration, so every other peer's
++  // dispatches queue behind it. Each step is timed separately: the two Invokes wait on
++  // another thread's queue, WaitForPendingRequest waits on an in-flight getStats, and
++  // the rest is work proportional to transceiver count.
++  const int64_t close_t0 = rtc::TimeMillis();
++
+   // Update stats here so that we have the most recent stats for tracks and
+   // streams before the channels are closed.
+   stats_->UpdateStats(kStatsOutputLevelStandard);
++  const int64_t t_update_stats = rtc::TimeMillis();
+ 
+   ChangeSignalingState(PeerConnectionInterface::kClosed);
+   NoteUsageEvent(UsageEvent::CLOSE_CALLED);
+ 
++  // Counted rather than derived: transceivers_ accumulates across renegotiations and
++  // is expected to match the m-line count, which is what this comparison checks.
++  const size_t transceiver_count = transceivers_.size();
++  size_t stopped_transceivers = 0;
+   for (const auto& transceiver : transceivers_) {
++    if (transceiver->stopped()) {
++      ++stopped_transceivers;
++    }
+     transceiver->Stop();
+   }
++  const int64_t t_stop_transceivers = rtc::TimeMillis();
++
++  const SessionDescriptionInterface* local_desc = local_description();
++  const SessionDescriptionInterface* remote_desc = remote_description();
++  const size_t local_m_lines = local_desc ? local_desc->number_of_mediasections() : 0;
++  const size_t remote_m_lines = remote_desc ? remote_desc->number_of_mediasections() : 0;
+ 
+   // Ensure that all asynchronous stats requests are completed before destroying
+   // the transport controller below.
+   if (stats_collector_) {
+     stats_collector_->WaitForPendingRequest();
+   }
++  const int64_t t_wait_stats = rtc::TimeMillis();
+ 
+   // Don't destroy BaseChannels until after stats has been cleaned up so that
+   // the last stats request can still read from the channels.
+   DestroyAllChannels();
++  const int64_t t_destroy_channels = rtc::TimeMillis();
+ 
+   // The event log is used in the transport controller, which must be outlived
+   // by the former. CreateOffer by the peer connection is implemented
+@@ -4516,10 +4646,12 @@ void PeerConnection::Close() {
+   // call the transport controller.
+   webrtc_session_desc_factory_.reset();
+   transport_controller_.reset();
++  const int64_t t_reset_transport = rtc::TimeMillis();
+ 
+   network_thread()->Invoke<void>(
+       RTC_FROM_HERE, rtc::Bind(&cricket::PortAllocator::DiscardCandidatePool,
+                                port_allocator_.get()));
++  const int64_t t_network_invoke = rtc::TimeMillis();
+ 
+   worker_thread()->Invoke<void>(RTC_FROM_HERE, [this] {
+     RTC_DCHECK_RUN_ON(worker_thread());
+@@ -4527,7 +4659,33 @@ void PeerConnection::Close() {
+     // The event log must outlive call (and any other object that uses it).
+     event_log_.reset();
+   });
++  const int64_t t_worker_invoke = rtc::TimeMillis();
++
+   ReportUsagePattern();
++
++  const int64_t close_total = rtc::TimeMillis() - close_t0;
++  if (close_total >= kSlowCloseLogThresholdMs) {
++    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=close_phases"
++                      << " handler=" << static_cast<const void*>(this)
++                      << " total_ms=" << close_total
++                      << " update_stats_ms=" << (t_update_stats - close_t0)
++                      << " stop_transceivers_ms="
++                      << (t_stop_transceivers - t_update_stats)
++                      << " wait_stats_ms=" << (t_wait_stats - t_stop_transceivers)
++                      << " destroy_channels_ms="
++                      << (t_destroy_channels - t_wait_stats)
++                      << " reset_transport_ms="
++                      << (t_reset_transport - t_destroy_channels)
++                      << " network_invoke_ms="
++                      << (t_network_invoke - t_reset_transport)
++                      << " worker_invoke_ms="
++                      << (t_worker_invoke - t_network_invoke)
++                      << " transceivers=" << transceiver_count
++                      << " already_stopped=" << stopped_transceivers
++                      << " local_m_lines=" << local_m_lines
++                      << " remote_m_lines=" << remote_m_lines;
++  }
++
+   // The .h file says that observer can be discarded after close() returns.
+   // Make sure this is true.
+   observer_ = nullptr;
+diff --git a/rtc_base/thread.cc b/rtc_base/thread.cc
+index f3d5b68672..fd3e781b3c 100644
+--- a/rtc_base/thread.cc
++++ b/rtc_base/thread.cc
+@@ -697,6 +697,7 @@ void Thread::Dispatch(Message* pmsg) {
+                       << " dispatch_ms=" << diff
+                       << " message_id=" << pmsg->message_id
+                       << " handler=" << static_cast<const void*>(pmsg->phandler)
++                      << " thread=" << (name_.empty() ? "unnamed" : name_)
+                       << " tid=" << tid_.load(std::memory_order_relaxed)
+                       << " function=" << pmsg->posted_from.function_name()
+                       << " posted_from=" << pmsg->posted_from.file_name() << ":"
+-- 
+2.25.1
+

@@ -291,7 +291,8 @@ void P2PClient::Unpublish(
     const std::string& target_id,
     std::shared_ptr<LocalStream> stream,
     std::function<void()> on_success,
-    std::function<void(std::unique_ptr<Exception>)> on_failure) {
+    std::function<void(std::unique_ptr<Exception>)> on_failure,
+    uint64_t stop_id) {
   if (!IsPeerConnectionChannelCreated(target_id)) {
     if (on_failure) {
       event_queue_->PostTask([on_failure] {
@@ -304,7 +305,7 @@ void P2PClient::Unpublish(
     return;
   }
   auto pcc = GetPeerConnectionChannel(target_id);
-  pcc->Unpublish(stream, on_success, on_failure);
+  pcc->Unpublish(stream, on_success, on_failure, stop_id);
 }
 bool P2PClient::IsPeerConnectionChannelCreated(const std::string& target_id) {
   const std::lock_guard<std::mutex> lock(pc_channels_mutex_);

@@ -1,0 +1,139 @@
+From c3eacbefad2a1f947fc1db92083cb4d2c30fcac8 Mon Sep 17 00:00:00 2001
+From: ambient <dev@ambient.ai>
+Date: Thu, 3 Sep 2026 14:38:17 +0000
+Subject: Time the SDP observer paths: chain drain, wrapped observer, implicit
+ SLD
+
+Two CreateSessionDescriptionObserver implementations receive the message posted from
+webrtc_session_description_factory.cc:465, and both run inside one Thread::Dispatch:
+
+  CreateSessionDescriptionObserverOperationWrapper - drains the operations chain, then
+  invokes the wrapped observer. Reaches the OWT handler, which logs sdp_created.
+
+  PeerConnection::ImplicitCreateSessionDescriptionObserver - used by parameterless
+  SetLocalDescription(). Runs DoSetLocalDescription synchronously, then drains the
+  chain. Never enters OWT, so it emits no sdp_created and was previously untimed.
+
+Releasing the chain runs the next queued operation synchronously, so the drain is timed
+apart from the work in every case. The handler address joins these to slow_dispatch.
+---
+ pc/peer_connection.cc | 58 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
+
+diff --git a/pc/peer_connection.cc b/pc/peer_connection.cc
+index 14281eb243..01b3e8bc5f 100644
+--- a/pc/peer_connection.cc
++++ b/pc/peer_connection.cc
+@@ -56,6 +56,7 @@
+ #include "rtc_base/logging.h"
+ #include "rtc_base/string_encode.h"
+ #include "rtc_base/strings/string_builder.h"
++#include "rtc_base/time_utils.h"
+ #include "rtc_base/trace_event.h"
+ #include "system_wrappers/include/clock.h"
+ #include "system_wrappers/include/field_trial.h"
+@@ -645,6 +646,9 @@ const ContentInfo* FindTransceiverMSection(
+              : nullptr;
+ }
+ 
++// Above this, the chain drain and the wrapped observer are each logged.
++constexpr int64_t kOperationWrapperLogThresholdMs = 1000;
++
+ // Wraps a CreateSessionDescriptionObserver and an OperationsChain operation
+ // complete callback. When the observer is invoked, the wrapped observer is
+ // invoked followed by invoking the completion callback.
+@@ -669,8 +673,25 @@ class CreateSessionDescriptionObserverOperationWrapper
+ #endif  // RTC_DCHECK_IS_ON
+     // Completing the operation before invoking the observer allows the observer
+     // to execute SetLocalDescription() without delay.
++    //
++    // Releasing the chain runs the next queued operation synchronously on this
++    // thread, and any number after it, so the drain is timed apart from the
++    // observer -- both sit inside one Thread::Dispatch otherwise.
++    const int64_t t0 = rtc::TimeMillis();
+     operation_complete_callback_();
++    const int64_t t1 = rtc::TimeMillis();
++    if (t1 - t0 >= kOperationWrapperLogThresholdMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=chain_drain_timing"
++                        << " outcome=success observer=" << static_cast<const void*>(this)
++                        << " chain_ms=" << (t1 - t0);
++    }
+     observer_->OnSuccess(desc);
++    const int64_t t2 = rtc::TimeMillis();
++    if (t2 - t1 >= kOperationWrapperLogThresholdMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sdp_observer_timing"
++                        << " outcome=success observer=" << static_cast<const void*>(this)
++                        << " observer_ms=" << (t2 - t1);
++    }
+   }
+ 
+   void OnFailure(RTCError error) override {
+@@ -678,8 +699,21 @@ class CreateSessionDescriptionObserverOperationWrapper
+ #ifdef RTC_DCHECK_IS_ON
+     was_called_ = true;
+ #endif  // RTC_DCHECK_IS_ON
++    const int64_t t0 = rtc::TimeMillis();
+     operation_complete_callback_();
++    const int64_t t1 = rtc::TimeMillis();
++    if (t1 - t0 >= kOperationWrapperLogThresholdMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=chain_drain_timing"
++                        << " outcome=failure observer=" << static_cast<const void*>(this)
++                        << " chain_ms=" << (t1 - t0);
++    }
+     observer_->OnFailure(std::move(error));
++    const int64_t t2 = rtc::TimeMillis();
++    if (t2 - t1 >= kOperationWrapperLogThresholdMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sdp_observer_timing"
++                        << " outcome=failure observer=" << static_cast<const void*>(this)
++                        << " observer_ms=" << (t2 - t1);
++    }
+   }
+ 
+  private:
+@@ -728,19 +762,43 @@ class PeerConnection::ImplicitCreateSessionDescriptionObserver
+ 
+     // Abort early if |pc_| is no longer valid.
+     if (!pc_) {
++      const int64_t abort_t0 = rtc::TimeMillis();
+       operation_complete_callback_();
++      const int64_t abort_t1 = rtc::TimeMillis();
++      if (abort_t1 - abort_t0 >= kOperationWrapperLogThresholdMs) {
++        RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=implicit_chain_drain_timing"
++                          << " outcome=pc_gone chain_ms=" << (abort_t1 - abort_t0);
++      }
+       return;
+     }
+     // DoSetLocalDescription() is currently implemented as a synchronous
+     // operation but where the |set_local_description_observer_|'s callbacks are
+     // invoked asynchronously in a post to PeerConnection::OnMessage().
++    //
++    // This path is reached by parameterless SetLocalDescription(), which creates the
++    // offer implicitly; it never enters the OWT observer, so it emits no sdp_created.
++    // Both statements below run inside one Thread::Dispatch: the SLD itself, then the
++    // chain drain, which can run any number of queued operations synchronously.
++    const int64_t t0 = rtc::TimeMillis();
+     pc_->DoSetLocalDescription(std::move(desc),
+                                std::move(set_local_description_observer_));
++    const int64_t t1 = rtc::TimeMillis();
++    if (t1 - t0 >= kOperationWrapperLogThresholdMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=implicit_sld_timing outcome=success"
++                        << " handler=" << static_cast<const void*>(pc_.get())
++                        << " sld_ms=" << (t1 - t0);
++    }
+     // For backwards-compatability reasons, we declare the operation as
+     // completed here (rather than in PeerConnection::OnMessage()). This ensures
+     // that subsequent offer/answer operations can start immediately (without
+     // waiting for OnMessage()).
+     operation_complete_callback_();
++    const int64_t t2 = rtc::TimeMillis();
++    if (t2 - t1 >= kOperationWrapperLogThresholdMs) {
++      RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=implicit_chain_drain_timing"
++                        << " outcome=success handler=" << static_cast<const void*>(pc_.get())
++                        << " chain_ms=" << (t2 - t1);
++    }
+   }
+ 
+   void OnFailure(RTCError error) override {
+-- 
+2.25.1
+

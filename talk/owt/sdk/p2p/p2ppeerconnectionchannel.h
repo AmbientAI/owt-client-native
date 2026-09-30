@@ -7,6 +7,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <atomic>
 #include <chrono>
 #include "talk/owt/sdk/base/peerconnectiondependencyfactory.h"
 #include "talk/owt/sdk/base/peerconnectionchannel.h"
@@ -74,7 +75,8 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   // Unpublish a local stream to remote user.
   void Unpublish(std::shared_ptr<LocalStream> stream,
                  std::function<void()> on_success,
-                 std::function<void(std::unique_ptr<Exception>)> on_failure);
+                 std::function<void(std::unique_ptr<Exception>)> on_failure,
+                 uint64_t stop_id = 0);
   // Send message to remote user.
   void Send(const std::string& message,
             std::function<void()> on_success,
@@ -205,6 +207,20 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   std::unordered_set<std::string> publishing_streams_;
   std::mutex pending_publish_streams_mutex_;
   std::mutex pending_unpublish_streams_mutex_;
+  // stop_id per queued unpublish, parallel to pending_unpublish_streams_ and
+  // guarded by the same mutex. A scalar does not work here: Unpublish pushes one
+  // stream and drains inline, so several Stop() calls can queue before a drain
+  // runs and consumes them together. A single slot keeps only the last id and
+  // every other drain reports 0.
+  std::vector<uint64_t> pending_unpublish_stop_ids_;
+  // Stamped just before SetLocalDescription() and read in its success/failure
+  // callback. sdp_created -> set_local_sdp_success reached 30s in production
+  // with no span covering it: SetLocalDescription queues on libwebrtc's
+  // per-connection operations chain, so the call can return instantly while the
+  // observer fires much later. Timing the call and the callback separately says
+  // which of the two holds the time.
+  std::chrono::steady_clock::time_point sld_t0_;
+  std::atomic<bool> sld_pending_{false};
   // Shared by |published_streams_| and |publishing_streams_|.
   std::mutex published_streams_mutex_;
   std::vector<P2PPeerConnectionChannelObserver*> observers_;

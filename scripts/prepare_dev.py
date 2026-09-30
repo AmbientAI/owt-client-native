@@ -20,6 +20,7 @@ LIBSRTP_PATH = os.path.join(THIRD_PARTY_PATH, 'libsrtp')
 LIBJPEG_TURBO_PATH = os.path.join(THIRD_PARTY_PATH, 'libjpeg_turbo')
 FFMPEG_PATH = os.path.join(THIRD_PARTY_PATH, 'ffmpeg')
 WEBRTC_OVERRIDES_PATH = os.path.join(THIRD_PARTY_PATH, 'webrtc_overrides')
+WEBRTC_PATH = os.path.join(THIRD_PARTY_PATH, 'webrtc')
 BUILD_PATH = os.path.join(HOME_PATH, 'build')
 TOOL_PATH = os.path.join(HOME_PATH, 'tools')
 BASE_PATH = os.path.join(HOME_PATH, 'base')
@@ -40,7 +41,11 @@ patchList = [
     ('0009-Export-WebRTC-symbols-on-iOS.patch', BUILD_PATH),
     ('0011-libjpeg_turbo-fix-for-CVE-2018-20330-and-19664.patch', LIBJPEG_TURBO_PATH),
     ('0013-Remove-unused-gni-for-av1-build.patch', THIRD_PARTY_PATH),
-    ('0014-Fix-missing-ffmpeg-configure-item-for-msvc-build.patch', FFMPEG_PATH)
+    ('0014-Fix-missing-ffmpeg-configure-item-for-msvc-build.patch', FFMPEG_PATH),
+    ('0016-Publish-in-flight-dispatch-state-on-rtc-Thread.patch', WEBRTC_PATH),
+    ('0017-Time-the-SDP-observer-paths.patch', WEBRTC_PATH),
+    ('0018-Report-operations-chain-cascades.patch', WEBRTC_PATH),
+    ('0019-Break-down-DoSetLocalDescription-and-Close-into-phases.patch', WEBRTC_PATH)
 ]
 
 def _patch(ignoreFailures=False):
