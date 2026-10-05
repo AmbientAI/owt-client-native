@@ -119,7 +119,11 @@ class GlobalConfiguration {
    SDP work across N sets of threads instead of one. Default 1, which keeps the
    single-factory behaviour exactly. Read once, when the first factory is
    created, so it must be set before any stream or PeerConnection exists.
-   Values are clamped to [1, kMaxPeerConnectionFactoryShards].
+   Values are clamped to [1, kMaxPeerConnectionFactoryShards]. With a
+   customized video decoder set (SetCustomizedVideoDecoderEnabled) the SDK runs
+   one factory regardless: there is a single decoder instance and only one
+   factory can own it, so sharding would leave the other shards silently on
+   the builtin decoder.
    @param shards Number of factory shards.
    */
   static void SetPeerConnectionFactoryShards(int shards) {

@@ -78,12 +78,28 @@ uint64_t Fnv1a64(const std::string& s) {
   return h;
 }
 
-size_t ClampedShardCount() {
+// Set when a factory builds its decoder factory from the app's customized
+// video decoder. Only one factory can: GetCustomizedVideoDecoder() std::move()s
+// the single decoder out, after which GlobalConfiguration reports it disabled.
+std::atomic<bool> g_custom_video_decoder_taken{false};
+
+// Configured shard count clamped to [1, kMaxPeerConnectionFactoryShards].
+size_t RangeClampedShardCount() {
   const int requested = GlobalConfiguration::GetPeerConnectionFactoryShards();
   const int max_shards = GlobalConfiguration::kMaxPeerConnectionFactoryShards;
   if (requested < 1) return 1;
   if (requested > max_shards) return static_cast<size_t>(max_shards);
   return static_cast<size_t>(requested);
+}
+
+// Effective shard count. One customized decoder cannot serve N factories:
+// shard 0 would take it and shards 1..N-1 would silently fall back to the
+// builtin decoder, so a node with a customized decoder runs one factory.
+// |custom_decoder|: the app configured one, whether it is still waiting in
+// GlobalConfiguration or a factory (shard 0) has already taken it.
+size_t ClampedShardCount(bool custom_decoder) {
+  const size_t count = RangeClampedShardCount();
+  return (count > 1 && custom_decoder) ? 1 : count;
 }
 
 // The one placement rule: every shard lookup, including the log-only peek,
@@ -159,13 +175,17 @@ PeerConnectionDependencyFactory::Shards() {
   static std::vector<PeerConnectionDependencyFactory*>* shards =
       new std::vector<PeerConnectionDependencyFactory*>();
   std::call_once(get_shards_once, []() {
-    const size_t count = ClampedShardCount();
-    if (count != static_cast<size_t>(
-                     GlobalConfiguration::GetPeerConnectionFactoryShards())) {
+    const int requested = GlobalConfiguration::GetPeerConnectionFactoryShards();
+    const size_t ranged = RangeClampedShardCount();
+    const size_t count = EffectiveShardCount();
+    if (count != ranged) {
       RTC_LOG(LS_ERROR) << "[CONN-DIAG][WARN] event=factory_shards_clamped"
-                        << " requested="
-                        << GlobalConfiguration::GetPeerConnectionFactoryShards()
-                        << " effective=" << count;
+                        << " requested=" << requested << " effective=" << count
+                        << " reason=custom_video_decoder";
+    } else if (count != static_cast<size_t>(requested)) {
+      RTC_LOG(LS_ERROR) << "[CONN-DIAG][WARN] event=factory_shards_clamped"
+                        << " requested=" << requested << " effective=" << count
+                        << " reason=out_of_range";
     }
     shards->reserve(count);
     // Shard 0 IS the Get() singleton. It is built first, so the process-wide
@@ -187,6 +207,12 @@ PeerConnectionDependencyFactory::Shards() {
   return *shards;
 }
 
+size_t PeerConnectionDependencyFactory::EffectiveShardCount() {
+  return ClampedShardCount(
+      GlobalConfiguration::GetCustomizedVideoDecoderEnabled() ||
+      g_custom_video_decoder_taken.load(std::memory_order_acquire));
+}
+
 size_t PeerConnectionDependencyFactory::ShardCount() {
   return Shards().size();
 }
@@ -201,7 +227,7 @@ size_t PeerConnectionDependencyFactory::PeekShardIndexForKey(
   // Once built, the list's own size; before that, the clamped config value
   // the list will be built from. Either way the same count placement uses.
   const size_t built = g_built_shard_count.load(std::memory_order_acquire);
-  return IndexFor(key, built ? built : ClampedShardCount());
+  return IndexFor(key, built ? built : EffectiveShardCount());
 }
 
 PeerConnectionDependencyFactory* PeerConnectionDependencyFactory::GetForKey(
@@ -322,6 +348,7 @@ void PeerConnectionDependencyFactory::
   if (GlobalConfiguration::GetCustomizedVideoDecoderEnabled()) {
     decoder_factory.reset(new CustomizedVideoDecoderFactory(
         GlobalConfiguration::GetCustomizedVideoDecoder()));
+    g_custom_video_decoder_taken.store(true, std::memory_order_release);
   } else if (render_hardware_acceleration_enabled_) {
     decoder_factory.reset(new MSDKVideoDecoderFactory());
   } else {
@@ -342,6 +369,7 @@ void PeerConnectionDependencyFactory::
   if (GlobalConfiguration::GetCustomizedVideoDecoderEnabled()) {
     decoder_factory.reset(new CustomizedVideoDecoderFactory(
         GlobalConfiguration::GetCustomizedVideoDecoder()));
+    g_custom_video_decoder_taken.store(true, std::memory_order_release);
   } else {
     decoder_factory = webrtc::CreateBuiltinVideoDecoderFactory();
   }

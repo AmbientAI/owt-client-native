@@ -95,6 +95,10 @@ class PeerConnectionDependencyFactory : public rtc::RefCountInterface {
  private:
   // All shards, index 0 being Get(). Built once, never destroyed.
   static const std::vector<PeerConnectionDependencyFactory*>& Shards();
+  // Effective shard count: the configured value clamped to [1, 16], and 1 when
+  // the app set a customized video decoder (see ClampedShardCount in the .cc).
+  // A member so it may read GlobalConfiguration's private decoder state.
+  static size_t EffectiveShardCount();
   // Audio device for shards other than 0. See the .cc for why.
   rtc::scoped_refptr<webrtc::AudioDeviceModule>
   CreateShardAudioDeviceModuleOnCurrentThread();
