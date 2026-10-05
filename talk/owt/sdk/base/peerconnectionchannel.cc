@@ -24,10 +24,17 @@ PeerConnectionChannel::~PeerConnectionChannel() {
     peer_connection_ = nullptr;
   }
 }
-bool PeerConnectionChannel::InitializePeerConnection() {
+rtc::Thread* PeerConnectionChannel::FactorySignalingThread() const {
+  return factory_ ? factory_->SignalingThread() : nullptr;
+}
+size_t PeerConnectionChannel::FactoryShardIndex() const {
+  return factory_ ? factory_->shard_index() : 0;
+}
+bool PeerConnectionChannel::InitializePeerConnection(
+    const std::string& shard_key) {
   RTC_LOG(LS_INFO) << "Initialize PeerConnection.";
   if (factory_.get() == nullptr)
-    factory_ = PeerConnectionDependencyFactory::Get();
+    factory_ = PeerConnectionDependencyFactory::GetForKey(shard_key);
   audio_transceiver_direction_ = webrtc::RtpTransceiverDirection::kSendRecv;
   video_transceiver_direction_ = webrtc::RtpTransceiverDirection::kSendRecv;
   configuration_.enable_dtls_srtp = true;

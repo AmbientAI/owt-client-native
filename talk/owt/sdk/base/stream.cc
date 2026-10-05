@@ -537,8 +537,11 @@ LocalStream::LocalStream(
     RTC_LOG(LS_WARNING)
         << "Create Local Camera Stream without video and audio.";
   }
+  // Build the track on the factory shard of the peer this stream is for, so
+  // it stays on the same factory (and threads) as that peer's PeerConnection.
   scoped_refptr<PeerConnectionDependencyFactory> pcd_factory =
-      PeerConnectionDependencyFactory::Get();
+      PeerConnectionDependencyFactory::GetForKey(parameters->ShardKey());
+  factory_shard_ = pcd_factory->shard_index();
   std::string media_stream_id("MediaStream-" + rtc::CreateRandomUuid());
   Id(media_stream_id);
   scoped_refptr<MediaStreamInterface> stream =
@@ -569,8 +572,11 @@ LocalStream::LocalStream(
   if (!parameters->VideoEnabled() && !parameters->AudioEnabled()) {
     RTC_LOG(LS_WARNING) << "Create LocalStream without video and audio.";
   }
+  // Build the track on the factory shard of the peer this stream is for, so
+  // it stays on the same factory (and threads) as that peer's PeerConnection.
   scoped_refptr<PeerConnectionDependencyFactory> pcd_factory =
-      PeerConnectionDependencyFactory::Get();
+      PeerConnectionDependencyFactory::GetForKey(parameters->ShardKey());
+  factory_shard_ = pcd_factory->shard_index();
   std::string media_stream_id("MediaStream-" + rtc::CreateRandomUuid());
   Id(media_stream_id);
   scoped_refptr<MediaStreamInterface> stream =

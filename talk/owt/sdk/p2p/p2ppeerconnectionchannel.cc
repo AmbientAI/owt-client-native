@@ -121,7 +121,19 @@ P2PPeerConnectionChannel::P2PPeerConnectionChannel(
       ended_(false),
       created_time_(std::chrono::system_clock::now()) {
   RTC_CHECK(signaling_sender_);
-  InitializePeerConnection();
+  // Pin this peer to a factory shard by its remote id. AmbientClient keys the
+  // peer's streams on the same id (LocalCustomizedStreamParameters::ShardKey),
+  // which is what keeps every track on the same factory as its PeerConnection.
+  InitializePeerConnection(remote_id_);
+  if (PeerConnectionDependencyFactory::ShardCount() > 1) {
+    // LS_ERROR only because OWT runs at kError; this is informational.
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=factory_shard_selected peerid="
+                      << remote_id_ << " shard="
+                      << PeerConnectionDependencyFactory::ShardIndexForKey(
+                             remote_id_)
+                      << " shards="
+                      << PeerConnectionDependencyFactory::ShardCount();
+  }
   CreateDataChannel(kDataChannelLabelForTextMessage);
   if (event_queue) {
     event_queue_ = event_queue;
@@ -200,6 +212,24 @@ void P2PPeerConnectionChannel::Publish(
 
   if (!CheckNullPointer((uintptr_t)stream.get(), on_failure)) {
     RTC_LOG(LS_INFO) << "Local stream cannot be nullptr.";
+    return;
+  }
+  // A track made by one factory shard must never be added to a PeerConnection
+  // of another: their proxies are bound to different threads, so the sender
+  // would marshal worker-to-worker across shards and could park two shards'
+  // threads on each other. Callers key the stream and the peer identically, so
+  // this cannot trip today; it is here to fail such a publish loudly instead
+  // of letting it hang. With one shard both sides are always 0.
+  if (stream->FactoryShard() != FactoryShardIndex()) {
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG][ERROR] event=factory_shard_mismatch peerid="
+                      << remote_id_ << " stream_shard=" << stream->FactoryShard()
+                      << " pc_shard=" << FactoryShardIndex();
+    if (on_failure) {
+      std::unique_ptr<Exception> e(new Exception(
+          ExceptionType::kP2PClientInvalidArgument,
+          "The stream was created for a different factory shard."));
+      on_failure(std::move(e));
+    }
     return;
   }
   RTC_CHECK(stream->MediaStream());
@@ -766,6 +796,7 @@ void P2PPeerConnectionChannel::OnIceConnectionChange(
   const char* ice_conn_name = (new_state >= 0 && new_state <= 7) ? kIceConnStateNames[new_state] : "unknown";
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG][ICE] event=IceConnectionState peerid=" << remote_id_
+                   << " shard=" << FactoryShardIndex()
                    << " state=" << ice_conn_name << " (" << new_state << ")";
   switch (new_state) {
     case webrtc::PeerConnectionInterface::kIceConnectionConnected:
@@ -1313,13 +1344,14 @@ void P2PPeerConnectionChannel::DrainPendingStreams() {
       scoped_refptr<webrtc::MediaStreamInterface> media_stream =
           stream->MediaStream();
       RTC_CHECK(temp_pc_);
-      PeerConnectionDependencyFactory* dependency_factory =
+      // Hop to THIS peer's factory shard, not the Get() singleton: with more
+      // than one shard, temp_pc_'s proxies are bound to its own shard's
+      // signaling thread, so running the walk on another shard's thread would
+      // marshal every proxy call and park two signaling threads on each other.
+      rtc::Thread* signaling_thread =
           GlobalConfiguration::GetWebrtcMessageExecutionOptimizationEnabled()
-              ? PeerConnectionDependencyFactory::Get()
+              ? FactorySignalingThread()
               : nullptr;
-      rtc::Thread* signaling_thread = dependency_factory != nullptr
-                                          ? dependency_factory->SignalingThread()
-                                          : nullptr;
       const bool hop = signaling_thread != nullptr && !signaling_thread->IsCurrent();
 
       size_t n_transceivers = 0;
@@ -1421,6 +1453,7 @@ void P2PPeerConnectionChannel::SendStop(
 void P2PPeerConnectionChannel::ClosePeerConnection() {
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=close_peer_connection peerid=" << remote_id_
+                   << " shard=" << FactoryShardIndex()
                    << " already_ended=" << ended_;
   // Reference to peer connection  that outlives the scope of the locks.
   rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_;

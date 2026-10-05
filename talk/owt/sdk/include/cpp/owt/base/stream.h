@@ -282,6 +282,11 @@ class LocalStream : public Stream {
     return false;
 #endif
   }
+  /** @cond */
+  // Index of the factory shard this stream's tracks were created on. Always 0
+  // unless it was built from LocalCustomizedStreamParameters with a ShardKey.
+  size_t FactoryShard() const { return factory_shard_; }
+  /** @endcond */
 
  private:
 #if defined(WEBRTC_WIN) || defined(WEBRTC_LINUX)
@@ -290,6 +295,7 @@ class LocalStream : public Stream {
 #if defined(WEBRTC_MAC)
   std::unique_ptr<ObjcVideoCapturerInterface> capturer_;
 #endif
+  size_t factory_shard_ = 0;
 };
 /**
   @brief This class represents a remote stream.
