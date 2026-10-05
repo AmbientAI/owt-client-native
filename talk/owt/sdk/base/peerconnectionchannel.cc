@@ -56,8 +56,13 @@ bool PeerConnectionChannel::InitializePeerConnection(
 }
 void PeerConnectionChannel::ApplyBitrateSettings() {
   RTC_CHECK(peer_connection_);
+  ApplyBitrateSettings(peer_connection_);
+}
+void PeerConnectionChannel::ApplyBitrateSettings(
+    const rtc::scoped_refptr<webrtc::PeerConnectionInterface>& pc) {
+  RTC_CHECK(pc);
   std::vector<rtc::scoped_refptr<webrtc::RtpSenderInterface>> senders =
-      peer_connection_->GetSenders();
+      pc->GetSenders();
   if (senders.size() == 0) {
     RTC_LOG(LS_WARNING) << "Cannot set max bitrate without stream added.";
     return;

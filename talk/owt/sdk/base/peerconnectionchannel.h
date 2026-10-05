@@ -81,6 +81,11 @@ class PeerConnectionChannel : public webrtc::PeerConnectionObserver,
   // will result in a false return, with remaining settings applicable still applied.
   // Subclasses can override this to implementation specific bitrate allocation policies.
   void ApplyBitrateSettings();
+  // Same, on a caller-held reference. A subclass that can close the
+  // PeerConnection from another thread passes its own snapshot so this never
+  // reads peer_connection_ after the close cleared it.
+  void ApplyBitrateSettings(
+      const rtc::scoped_refptr<webrtc::PeerConnectionInterface>& pc);
   // Subclasses should prepare observers for these functions and post
   // message to PeerConnectionChannel.
   virtual void CreateOffer() = 0;
