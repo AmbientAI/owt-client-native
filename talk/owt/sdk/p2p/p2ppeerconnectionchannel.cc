@@ -665,7 +665,7 @@ void P2PPeerConnectionChannel::OnSignalingChange(
             webrtc::CreateSessionDescription(pending_remote_sdp_->type(),
                                              sdp_string, nullptr));
         pending_remote_sdp_.reset();
-        peer_connection_->SetRemoteDescription(std::move(new_desc), observer);
+        temp_pc_->SetRemoteDescription(std::move(new_desc), observer);
       } else {
         // Post DrainPendingStreams asynchronously so AddTrack() is not called
         // from within the WebRTC signaling callback. Calling AddTrack() from
@@ -886,10 +886,10 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=sdp_created peerid=" << remote_id_
                    << " type=" << desc->type();
-  {
-    std::lock_guard<std::mutex> lock(ended_mutex_);
-    if (ended_) { return; }
-  }
+  // Snapshot instead of checking ended_ and then reading peer_connection_:
+  // a close on another thread between the two would leave a null member.
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_) { return; }
   scoped_refptr<FunctionalSetSessionDescriptionObserver> observer =
       FunctionalSetSessionDescriptionObserver::Create(
           std::bind(
@@ -898,7 +898,7 @@ void P2PPeerConnectionChannel::OnCreateSessionDescriptionSuccess(
           std::bind(
               &P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure,
               this, std::placeholders::_1));
-  peer_connection_->SetLocalDescription(observer);
+  temp_pc_->SetLocalDescription(observer);
 }
 void P2PPeerConnectionChannel::OnCreateSessionDescriptionFailure(
     const std::string& error) {
@@ -919,9 +919,16 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionSuccess() {
     RTC_LOG(LS_INFO) << "Peer connection is closed, returning.";
     return;
   }
-  // Setting maximum bandwidth here.
-  ApplyBitrateSettings();
-  auto desc = LocalDescription();
+  // Setting maximum bandwidth here. Both calls use temp_pc_, never the
+  // peer_connection_ member: ClosePeerConnection() can clear the member from a
+  // pool thread at any point after the check above, and LocalDescription()'s
+  // RTC_CHECK(peer_connection_) would then abort the process.
+  ApplyBitrateSettings(temp_pc_);
+  auto desc = temp_pc_->local_description();
+  if (!desc) {
+    RTC_LOG(LS_ERROR) << "[CONN-DIAG][WARN] event=local_description_missing peerid=" << remote_id_;
+    return;
+  }
   string sdp;
   desc->ToString(&sdp);
   Json::Value signal;
@@ -940,14 +947,17 @@ void P2PPeerConnectionChannel::OnSetLocalSessionDescriptionFailure(
   Stop(nullptr, nullptr);
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess() {
-  {
-    std::lock_guard<std::mutex> lock(ended_mutex_);
-    if (ended_) { return; }
-  }
+  rtc::scoped_refptr<webrtc::PeerConnectionInterface> temp_pc_ = GetPeerConnectionRef();
+  if (!temp_pc_) { return; }
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=set_remote_sdp_success peerid=" << remote_id_
                    << " session_state=" << session_state_;
-  PeerConnectionChannel::OnSetRemoteSessionDescriptionSuccess();
+  // The base class reads peer_connection_ directly, which a concurrent close
+  // can clear; this is the same logic on the snapshot.
+  const webrtc::SessionDescriptionInterface* remote = temp_pc_->remote_description();
+  if (remote && remote->type() == "offer") {
+    CreateAnswer();
+  }
 }
 void P2PPeerConnectionChannel::OnSetRemoteSessionDescriptionFailure(
     const std::string& error) {
