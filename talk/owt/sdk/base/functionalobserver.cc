@@ -390,6 +390,42 @@ void FunctionalStandardRTCStatsCollectorCallback::OnStatsDelivered(
               OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, bytes_received, uint64_t,
                                          0));
       reports->AddStats(std::move(stat));
+    } else if (strcmp(stats.type(), RTCStatsType::kTransport) == 0) {
+      auto& webrtc_stats = stats.cast_to<webrtc::RTCTransportStats>();
+      std::unique_ptr<owt::base::RTCTransportStats> stat =
+          std::make_unique<owt::base::RTCTransportStats>(
+              webrtc_stats.id(), webrtc_stats.timestamp_us(),
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, bytes_sent, uint64_t, 0),
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, bytes_received, uint64_t,
+                                         0),
+              webrtc_stats.rtcp_transport_stats_id.is_defined()
+                  ? webrtc_stats.rtcp_transport_stats_id.ValueToString()
+                  : "",
+              webrtc_stats.dtls_state.is_defined()
+                  ? webrtc_stats.dtls_state.ValueToString()
+                  : "",
+              webrtc_stats.selected_candidate_pair_id.is_defined()
+                  ? webrtc_stats.selected_candidate_pair_id.ValueToString()
+                  : "",
+              webrtc_stats.local_certificate_id.is_defined()
+                  ? webrtc_stats.local_certificate_id.ValueToString()
+                  : "",
+              webrtc_stats.remote_certificate_id.is_defined()
+                  ? webrtc_stats.remote_certificate_id.ValueToString()
+                  : "",
+              webrtc_stats.tls_version.is_defined()
+                  ? webrtc_stats.tls_version.ValueToString()
+                  : "",
+              webrtc_stats.dtls_cipher.is_defined()
+                  ? webrtc_stats.dtls_cipher.ValueToString()
+                  : "",
+              webrtc_stats.srtp_cipher.is_defined()
+                  ? webrtc_stats.srtp_cipher.ValueToString()
+                  : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats,
+                                         selected_candidate_pair_changes,
+                                         uint32_t, 0));
+      reports->AddStats(std::move(stat));
     } else if (strcmp(stats.type(), RTCStatsType::kCandidatePair) == 0) {
       auto& webrtc_stats = stats.cast_to<webrtc::RTCIceCandidatePairStats>();
       std::unique_ptr<owt::base::RTCIceCandidatePairStats> stat =
