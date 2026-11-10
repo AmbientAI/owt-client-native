@@ -121,6 +121,15 @@ std::string Stream::Id() const {
 void Stream::Id(const std::string& id) {
   id_ = id;
 }
+std::vector<std::string> Stream::VideoTrackIds() const {
+  std::vector<std::string> ids;
+  if (media_stream_ == nullptr)
+    return ids;
+  for (const auto& track : media_stream_->GetVideoTracks()) {
+    ids.push_back(track->id());
+  }
+  return ids;
+}
 void Stream::DisableVideo() {
   SetVideoTracksEnabled(false);
 }
