@@ -754,6 +754,31 @@ void FunctionalStandardRTCStatsCollectorCallback::OnStatsDelivered(
                                             : "",
               OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, deleted, bool, false));
       reports->AddStats(std::move(stat));
+    } else if (strcmp(stats.type(), RTCStatsType::kRemoteInboundRTP) == 0) {
+      // The remote peer's RTCP receiver reports on what we send: loss and jitter.
+      auto& webrtc_stats =
+          stats.cast_to<webrtc::RTCRemoteInboundRtpStreamStats>();
+      std::unique_ptr<owt::base::RTCRemoteInboundRtpStreamStats> stat =
+          std::make_unique<owt::base::RTCRemoteInboundRtpStreamStats>(
+              webrtc_stats.id(), webrtc_stats.timestamp_us(),
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, ssrc, uint32_t, 0),
+              webrtc_stats.kind.is_defined() ? webrtc_stats.kind.ValueToString()
+                                             : "",
+              webrtc_stats.transport_id.is_defined()
+                  ? webrtc_stats.transport_id.ValueToString()
+                  : "",
+              webrtc_stats.codec_id.is_defined()
+                  ? webrtc_stats.codec_id.ValueToString()
+                  : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, packets_lost, int32_t,
+                                         0),
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, jitter, double, -1),
+              webrtc_stats.local_id.is_defined()
+                  ? webrtc_stats.local_id.ValueToString()
+                  : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, round_trip_time, double,
+                                         -1));
+      reports->AddStats(std::move(stat));
     }
   }
   if (reports->size() > 0) {
