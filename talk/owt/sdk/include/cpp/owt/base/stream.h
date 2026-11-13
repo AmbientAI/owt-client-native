@@ -70,6 +70,9 @@ class Stream {
     @return Stream's ID
   */
   virtual std::string Id() const;
+  /// ID of the stream's first video track (track_identifier in WebRTC stats),
+  /// or "" if it has none.
+  std::string FirstVideoTrackId() const;
   /// Disable all audio tracks of the stream.
   virtual void DisableAudio();
   /// Disable all video tracks of the stream.

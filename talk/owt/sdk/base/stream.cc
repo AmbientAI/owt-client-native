@@ -121,6 +121,14 @@ std::string Stream::Id() const {
 void Stream::Id(const std::string& id) {
   id_ = id;
 }
+std::string Stream::FirstVideoTrackId() const {
+  // Every LocalStream constructor adds at most one video track and nothing adds
+  // or replaces one later, so for a LocalStream the first is the only one.
+  if (media_stream_ == nullptr)
+    return "";
+  auto video_tracks = media_stream_->GetVideoTracks();
+  return video_tracks.empty() ? "" : video_tracks[0]->id();
+}
 void Stream::DisableVideo() {
   SetVideoTracksEnabled(false);
 }
