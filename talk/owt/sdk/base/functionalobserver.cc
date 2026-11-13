@@ -716,6 +716,44 @@ void FunctionalStandardRTCStatsCollectorCallback::OnStatsDelivered(
                   ? webrtc_stats.encoder_implementation.ValueToString()
                   : "");
       reports->AddStats(std::move(stat));
+    } else if (strcmp(stats.type(), RTCStatsType::kLocalCandidate) == 0 ||
+               strcmp(stats.type(), RTCStatsType::kRemoteCandidate) == 0) {
+      // cast_to checks the exact type, so local and remote cannot share one cast.
+      // Copy into the OWT base: RTCLocalIceCandidateStats inherits privately, and
+      // a caller could not read candidate_type or ip from that subclass.
+      const webrtc::RTCIceCandidateStats& webrtc_stats =
+          strcmp(stats.type(), RTCStatsType::kLocalCandidate) == 0
+              ? static_cast<const webrtc::RTCIceCandidateStats&>(
+                    stats.cast_to<webrtc::RTCLocalIceCandidateStats>())
+              : static_cast<const webrtc::RTCIceCandidateStats&>(
+                    stats.cast_to<webrtc::RTCRemoteIceCandidateStats>());
+      std::unique_ptr<RTCIceCandidateStats> stat =
+          std::make_unique<RTCIceCandidateStats>(
+              stats.type(), webrtc_stats.id(), webrtc_stats.timestamp_us(),
+              webrtc_stats.transport_id.is_defined()
+                  ? webrtc_stats.transport_id.ValueToString()
+                  : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, is_remote, bool, false),
+              webrtc_stats.network_type.is_defined()
+                  ? webrtc_stats.network_type.ValueToString()
+                  : "",
+              webrtc_stats.ip.is_defined() ? webrtc_stats.ip.ValueToString()
+                                           : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, port, int32_t, 0),
+              webrtc_stats.protocol.is_defined()
+                  ? webrtc_stats.protocol.ValueToString()
+                  : "",
+              webrtc_stats.relay_protocol.is_defined()
+                  ? webrtc_stats.relay_protocol.ValueToString()
+                  : "",
+              webrtc_stats.candidate_type.is_defined()
+                  ? webrtc_stats.candidate_type.ValueToString()
+                  : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, priority, int32_t, 0),
+              webrtc_stats.url.is_defined() ? webrtc_stats.url.ValueToString()
+                                            : "",
+              OWT_STATS_VALUE_OR_DEFAULT(webrtc_stats, deleted, bool, false));
+      reports->AddStats(std::move(stat));
     }
   }
   if (reports->size() > 0) {
