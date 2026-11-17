@@ -157,7 +157,9 @@ P2PPeerConnectionChannel::P2PPeerConnectionChannel(
 
 P2PPeerConnectionChannel::~P2PPeerConnectionChannel() {
   if (signaling_sender_) {
-    SendStop(nullptr, nullptr);
+    if (!stop_exchanged_) {
+      SendStop(nullptr, nullptr);
+    }
     delete signaling_sender_;
   }
   if (peer_connection_ != nullptr) {
@@ -510,6 +512,7 @@ void P2PPeerConnectionChannel::OnMessageStop() {
   // LS_INFO (elevated to LS_ERROR — see file header note)
   RTC_LOG(LS_ERROR) << "[CONN-DIAG] event=Remote user stopped. peerid=" << remote_id_
                    << " session_state=" << session_state_;
+  stop_exchanged_ = true;
   ClosePeerConnection();
   ChangeSessionState(kSessionStateReady);
 }
@@ -1101,6 +1104,7 @@ void P2PPeerConnectionChannel::Stop(
     case kSessionStateOffered:
 
       SendStop(nullptr, nullptr);
+      stop_exchanged_ = true;
       ClosePeerConnection();
       {
         std::lock_guard<std::mutex> lock(stop_send_mutex_);
