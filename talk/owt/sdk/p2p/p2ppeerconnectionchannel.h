@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #ifndef WOOGEEN_P2P_P2PPEERCONNECTIONCHANNEL_H_
 #define WOOGEEN_P2P_P2PPEERCONNECTIONCHANNEL_H_
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -248,6 +249,12 @@ class P2PPeerConnectionChannel : public P2PSignalingReceiverInterface,
   bool ua_sent_;
   std::mutex stop_send_mutex_;
   bool stop_send_needed_;
+  // True once this session's chat-closed was sent by Stop() or received from
+  // the remote side. Both directions already make the Ambient layer clean up
+  // the peer, so the destructor must not send another one: the channel is
+  // destroyed only when the next channel stops (P2PClient::removed_pc_), by
+  // which time the same remote id may have a new, live session.
+  std::atomic<bool> stop_exchanged_{false};
   bool remote_side_offline_;
   bool ended_;
   std::chrono::time_point<std::chrono::system_clock> created_time_;
